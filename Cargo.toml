@@ -20,8 +20,13 @@ get_first = "allow"
 get_last_with_len = "allow"
 
 [dependencies]
+ask_llm = "^0.1.2"
 clap = { version = "4.5.32", features = ["derive"] }
 color-eyre = "^0.6.3"
 derive-new = "^0"
-reqwest = { version = "^0.12.14", features = ["blocking"] }
+derive_more = { version = "2.0.1", features = ["from_str"] }
+reqwest = "0.12.14"
 scraper = "^0.23.1"
+tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1.41"
+v_utils = { version = "^2.6.2" } #ga: rm path

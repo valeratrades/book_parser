@@ -1,6 +1,6 @@
 use clap::Parser;
 use color_eyre::eyre::{Result, bail, eyre};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use scraper::{Html, Selector};
 
 #[derive(Debug, Parser)]
@@ -9,33 +9,56 @@ struct Cli {
 	/// The URL of the page to scrape
 	#[clap(short, long)]
 	url: String,
-
 	/// The CSS selector of the container element. Ex: ".page_text"
 	#[clap(short, long)]
 	css_selector: String,
+	/// Language to translate to (using llms). Ex: "German"
+	#[clap(short, long)]
+	language: Option<String>,
+}
+#[derive(Debug, Clone, Copy, derive_more::FromStr)]
+enum ServerProtocol {
+	Wayland,
+	X11,
 }
 
-fn main() {
-	color_eyre::install().unwrap();
+#[tokio::main]
+async fn main() {
+	v_utils::clientside!();
 	let cli: Cli = Cli::parse();
 
-	let paragraphs = parse(&cli.url, &cli.css_selector).unwrap();
-	let text = paragraphs.join("\n\n");
-	println!("{text}");
+	let paragraphs = parse(&cli.url, &cli.css_selector).await.unwrap();
+	let mut text = paragraphs.join("\n\n");
+
+	if let Some(lang) = cli.language {
+		text = translate(text, lang).await.unwrap();
+	}
+
+	println!("{text:#}");
 }
 
-fn parse(url: &str, css_selector: &str) -> Result<Vec<String>> {
+async fn translate(text: String, language: String) -> Result<String> {
+	let q = format!("Translate provided text to {language}: ```{text}```. Output as a codeblock.",);
+	let answer = ask_llm::oneshot(q, ask_llm::Model::Medium).await.unwrap();
+	tracing::info!("request cost (cents): {}", answer.cost_cents);
+	let codeblock = answer
+		.extract_codeblock(None)
+		.map_err(|_| eyre!("LLM has faltered and wasn't able to provide a codeblock with translated text"))?;
+	Ok(codeblock)
+}
+
+async fn parse(url: &str, css_selector: &str) -> Result<Vec<String>> {
 	let client = Client::builder()
 		.user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 		.build()?;
 
-	let response = client.get(url).send()?;
+	let response = client.get(url).send().await?;
 
 	if !response.status().is_success() {
 		bail!("Failed to retrieve the webpage. Status code: {}", response.status());
 	}
 
-	let html_content = response.text()?;
+	let html_content = response.text().await?;
 	let document = Html::parse_document(&html_content);
 
 	let container_selector = Selector::parse(css_selector).map_err(|_| eyre!("Invalid container selector: {}", css_selector))?;
