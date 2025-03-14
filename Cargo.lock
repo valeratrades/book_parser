@@ -161,6 +161,8 @@ dependencies = [
  "derive_more 2.0.1",
  "reqwest",
  "scraper",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "v_utils",

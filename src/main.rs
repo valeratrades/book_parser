@@ -37,8 +37,12 @@ async fn main() {
 	println!("{text:#}");
 }
 
+//Q: potentially switch to DeepL API
 async fn translate(text: String, language: String) -> Result<String> {
-	let q = format!("Translate provided text to {language}: ```{text}```. Output as a codeblock.",);
+	let mut q = format!("Translate provided text to {language}: ```{text}```. Output as a codeblock.",);
+	if language.to_lowercase() != "english" {
+		q += "After translating each word, consider if this word is often used. If not, if the word is not common, you add english translation right after it.";
+	}
 	let answer = ask_llm::oneshot(q, ask_llm::Model::Medium).await.unwrap();
 	tracing::info!("request cost (cents): {}", answer.cost_cents);
 	let codeblock = answer
