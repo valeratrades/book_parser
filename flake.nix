@@ -90,9 +90,10 @@
                 alias qr="./target/debug/${pname}"
               '';
 
-            buildInputs = [
+            packages = [
               mold-wrapped
               openssl
+              sccache
               pkg-config
               (rust-bin.fromRustupToolchainFile ./.cargo/rust-toolchain.toml)
             ] ++ pre-commit-check.enabledPackages;

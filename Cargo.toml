@@ -19,7 +19,9 @@ tabs_in_doc_comments = "allow"
 get_first = "allow"
 get_last_with_len = "allow"
 
-
 [dependencies]
-derive-new = "^0"
+clap = { version = "4.5.32", features = ["derive"] }
 color-eyre = "^0.6.3"
+derive-new = "^0"
+reqwest = { version = "^0.12.14", features = ["blocking"] }
+scraper = "^0.23.1"
