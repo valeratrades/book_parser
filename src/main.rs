@@ -41,7 +41,7 @@ async fn main() {
 async fn translate(text: String, language: String) -> Result<String> {
 	let mut q = format!("Translate provided text to {language}: ```{text}```. Output as a codeblock.",);
 	if language.to_lowercase() != "english" {
-		q += "After translating each word, consider if this word is often used. If not, if the word is not common, you add english translation right after it.";
+		q += "After translating each word, consider if this word is often used. If not, if the word is not common, in `{}` brackets right after it you add its source. For example: \"банальность\" (in original) should become \"Platitüde {бaнальность}\" (if the translation langauge is German), while say \"хлеб\" would become just \"Brot\", as it's a common word.";
 	}
 	let answer = ask_llm::oneshot(q, ask_llm::Model::Medium).await.unwrap();
 	tracing::info!("request cost (cents): {}", answer.cost_cents);
