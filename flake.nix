@@ -52,6 +52,7 @@
 
               buildInputs = with pkgs; [
                 openssl.dev
+								pkg-config
               ];
               nativeBuildInputs = with pkgs; [ pkg-config ];
 
@@ -93,7 +94,6 @@
             packages = [
               mold-wrapped
               openssl
-              sccache
               pkg-config
               (rust-bin.fromRustupToolchainFile ./.cargo/rust-toolchain.toml)
             ] ++ pre-commit-check.enabledPackages;
