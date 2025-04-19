@@ -27,8 +27,8 @@ async fn main() {
 	v_utils::clientside!();
 	let cli: Cli = Cli::parse();
 
-	let paragraphs = parse(&cli.url, &cli.css_selector).await.unwrap();
-	let mut text = paragraphs.join("\n\n");
+	let content_blocks = parse(&cli.url, &cli.css_selector).await.unwrap();
+	let mut text = content_blocks.join("\n\n");
 
 	if let Some(lang) = cli.language {
 		text = translate(text, lang).await.unwrap();
@@ -39,7 +39,7 @@ async fn main() {
 
 //Q: potentially switch to DeepL API
 async fn translate(text: String, language: String) -> Result<String> {
-	let mut q = format!("Translate provided text to {language}: ```{text}```. Output as a codeblock.",);
+	let q = format!("Translate provided text to {language}: ```{text}```. Output as a codeblock.",);
 	let answer = ask_llm::oneshot(q, ask_llm::Model::Medium).await.unwrap();
 	tracing::info!("request cost (cents): {}", answer.cost_cents);
 	let codeblock = answer
@@ -69,13 +69,37 @@ async fn parse(url: &str, css_selector: &str) -> Result<Vec<String>> {
 		.next()
 		.ok_or_else(|| eyre!("Container not found with selector: {}", css_selector))?;
 
+	// Create paragraph selector
 	let paragraph_selector = Selector::parse("p").map_err(|_| eyre!("Invalid paragraph selector"))?;
 
-	let paragraphs: Vec<String> = container.select(&paragraph_selector).map(|p| p.text().collect::<Vec<_>>().join("").trim().to_string()).collect();
+	// Collect all content blocks (paragraphs and headings)
+	let mut content_blocks = Vec::new();
 
-	if paragraphs.is_empty() {
-		bail!("No paragraphs found in the specified container");
+	// Process heading tags (h1-h6)
+	for heading_level in 1..=6 {
+		let heading_selector = Selector::parse(&format!("h{}", heading_level)).map_err(|_| eyre!("Invalid h{} selector", heading_level))?;
+
+		for heading in container.select(&heading_selector) {
+			let text = heading.text().collect::<Vec<_>>().join("").trim().to_string();
+			if !text.is_empty() {
+				// Create the appropriate number of # characters
+				let heading_markers = "#".repeat(heading_level);
+				content_blocks.push(format!("{} {}", heading_markers, text));
+			}
+		}
 	}
 
-	Ok(paragraphs)
+	// Process paragraphs
+	for p in container.select(&paragraph_selector) {
+		let text = p.text().collect::<Vec<_>>().join("").trim().to_string();
+		if !text.is_empty() {
+			content_blocks.push(text);
+		}
+	}
+
+	if content_blocks.is_empty() {
+		bail!("No content blocks (paragraphs or headings) found in the specified container");
+	}
+
+	Ok(content_blocks)
 }
