@@ -96,20 +96,18 @@ async fn parse(url: &str, css_selector: &str) -> Result<Vec<String>> {
 
 		// Format the text based on the element's tag type
 		let formatted_block = match tag_name {
+			"p" => text,
 			"h1" => format!("# {}", text),
 			"h2" => format!("## {}", text),
 			"h3" => format!("### {}", text),
 			"h4" => format!("#### {}", text),
 			"h5" => format!("##### {}", text),
 			"h6" => format!("###### {}", text),
-			"p" => text, // Paragraphs require no special formatting
 			"div" => {
-				// Specifically check if this div has the 'subtitle' class
-				if element.value().has_class("subtitle", scraper::CaseSensitivity::CaseSensitive) {
-					// Treat div.subtitle as an h4 heading
-					format!("#### {}", text)
+				// a website I care to scrape has this delimiter standard.
+				if element.value().has_class("subtitle", scraper::CaseSensitivity::CaseSensitive) && text == "* * *" {
+					"#### * * *".to_owned()
 				} else {
-					// Ignore other divs that might somehow match (though our selector is specific)
 					continue;
 				}
 			}
