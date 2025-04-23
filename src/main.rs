@@ -50,11 +50,13 @@ async fn translate(text: String, language: String) -> Result<String> {
 
 async fn parse(url: &str, css_selector: &str) -> Result<Vec<String>> {
 	let client = Client::builder()
+		// Using a common browser user agent can help avoid blocking by some websites
 		.user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 		.build()?;
 
 	let response = client.get(url).send().await?;
 
+	// Ensure the request was successful
 	if !response.status().is_success() {
 		bail!("Failed to retrieve the webpage. Status code: {}", response.status());
 	}
@@ -62,43 +64,64 @@ async fn parse(url: &str, css_selector: &str) -> Result<Vec<String>> {
 	let html_content = response.text().await?;
 	let document = Html::parse_document(&html_content);
 
-	let container_selector = Selector::parse(css_selector).map_err(|_| eyre!("Invalid container selector: {}", css_selector))?;
+	// Parse the CSS selector for the main content container
+	let container_selector = Selector::parse(css_selector).map_err(|e| eyre!("Invalid container selector '{}': {}", css_selector, e))?; // Provide context in error
 
+	// Find the container element in the parsed HTML
 	let container = document
 		.select(&container_selector)
-		.next()
+		.next() // We assume there's only one main container matching the selector
 		.ok_or_else(|| eyre!("Container not found with selector: {}", css_selector))?;
 
-	// Create paragraph selector
-	let paragraph_selector = Selector::parse("p").map_err(|_| eyre!("Invalid paragraph selector"))?;
+	// Create a single selector that matches all desired content elements:
+	// headings (h1-h6), paragraphs (p), and specific divs (div.subtitle)
+	// The scraper `select` method inherently returns elements in their document order.
+	let content_selector = Selector::parse("h1, h2, h3, h4, h5, h6, p, div.subtitle") // Added div.subtitle here
+		.map_err(|e| eyre!("Internal error: Invalid content block selector: {}", e))?; // This selector should always be valid
 
-	// Collect all content blocks (paragraphs and headings)
 	let mut content_blocks = Vec::new();
 
-	// Process heading tags (h1-h6)
-	for heading_level in 1..=6 {
-		let heading_selector = Selector::parse(&format!("h{}", heading_level)).map_err(|_| eyre!("Invalid h{} selector", heading_level))?;
+	// Iterate through all matching elements within the container, preserving document order
+	for element in container.select(&content_selector) {
+		// Extract and clean up the text content of the element
+		let text = element.text().collect::<Vec<_>>().join("").trim().to_string();
 
-		for heading in container.select(&heading_selector) {
-			let text = heading.text().collect::<Vec<_>>().join("").trim().to_string();
-			if !text.is_empty() {
-				// Create the appropriate number of # characters
-				let heading_markers = "#".repeat(heading_level);
-				content_blocks.push(format!("{} {}", heading_markers, text));
+		// Skip elements that contain only whitespace or are empty
+		if text.is_empty() {
+			continue;
+		}
+
+		// Get the HTML tag name (e.g., "h1", "p", "div") to determine formatting
+		let tag_name = element.value().name();
+
+		// Format the text based on the element's tag type
+		let formatted_block = match tag_name {
+			"h1" => format!("# {}", text),
+			"h2" => format!("## {}", text),
+			"h3" => format!("### {}", text),
+			"h4" => format!("#### {}", text),
+			"h5" => format!("##### {}", text),
+			"h6" => format!("###### {}", text),
+			"p" => text, // Paragraphs require no special formatting
+			"div" => {
+				// Specifically check if this div has the 'subtitle' class
+				if element.value().has_class("subtitle", scraper::CaseSensitivity::CaseSensitive) {
+					// Treat div.subtitle as an h4 heading
+					format!("#### {}", text)
+				} else {
+					// Ignore other divs that might somehow match (though our selector is specific)
+					continue;
+				}
 			}
-		}
+			_ => continue, // Should not happen with our specific selector, but acts as a safeguard
+		};
+
+		content_blocks.push(formatted_block);
 	}
 
-	// Process paragraphs
-	for p in container.select(&paragraph_selector) {
-		let text = p.text().collect::<Vec<_>>().join("").trim().to_string();
-		if !text.is_empty() {
-			content_blocks.push(text);
-		}
-	}
-
+	// Check if any content was actually extracted
 	if content_blocks.is_empty() {
-		bail!("No content blocks (paragraphs or headings) found in the specified container");
+		bail!("No content blocks (paragraphs, headings, or subtitles) found in the specified container");
 	}
 
 	Ok(content_blocks)
