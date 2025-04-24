@@ -9,9 +9,9 @@ struct Cli {
 	/// The URL of the page to scrape
 	#[clap(short, long)]
 	url: String,
-	/// The CSS selector of the container element. Ex: ".page_text"
+	/// The CSS selector of the container element. Ex: ".page_text". Multiple can be provided, which will be iterated over until the first match.
 	#[clap(short, long)]
-	css_selector: String,
+	css_selectors: Vec<String>,
 	/// Language to translate to (using llms). Ex: "German"
 	#[clap(short, long)]
 	language: Option<String>,
@@ -27,7 +27,7 @@ async fn main() {
 	v_utils::clientside!();
 	let cli: Cli = Cli::parse();
 
-	let content_blocks = parse(&cli.url, &cli.css_selector).await.unwrap();
+	let content_blocks = parse(&cli.url, cli.css_selectors).await.unwrap();
 	let mut text = content_blocks.join("\n\n");
 
 	if let Some(lang) = cli.language {
@@ -48,7 +48,7 @@ async fn translate(text: String, language: String) -> Result<String> {
 	Ok(codeblock)
 }
 
-async fn parse(url: &str, css_selector: &str) -> Result<Vec<String>> {
+async fn parse(url: &str, css_selector_strings: Vec<String>) -> Result<Vec<String>> {
 	let client = Client::builder()
 		// Using a common browser user agent can help avoid blocking by some websites
 		.user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -64,14 +64,31 @@ async fn parse(url: &str, css_selector: &str) -> Result<Vec<String>> {
 	let html_content = response.text().await?;
 	let document = Html::parse_document(&html_content);
 
-	// Parse the CSS selector for the main content container
-	let container_selector = Selector::parse(css_selector).map_err(|e| eyre!("Invalid container selector '{}': {}", css_selector, e))?; // Provide context in error
+	let mut css_selectors = Vec::with_capacity(css_selector_strings.len());
+	for s in css_selector_strings.iter() {
+		let selector = Selector::parse(s).map_err(|e| eyre!("Invalid CSS selector: {}. Error: {}", s, e))?;
+		css_selectors.push(selector);
+	}
 
-	// Find the container element in the parsed HTML
-	let container = document
-		.select(&container_selector)
-		.next() // We assume there's only one main container matching the selector
-		.ok_or_else(|| eyre!("Container not found with selector: {}", css_selector))?;
+	let container = {
+		assert!(css_selectors.len() > 0, "No CSS selectors provided");
+		let mut i = 0;
+		loop {
+			match document.select(&css_selectors[i]).next() /*We assume there's only one main container matching the selector*/
+			{
+				Some(container) => {
+					tracing::info!("Got a match on css selector: {}", css_selector_strings[i]);
+					break container
+				},
+				None => {
+					if i >= css_selectors.len() {
+						bail!("No matching container found for any of the provided CSS selectors");
+					}
+					i += 1;
+				}
+			}
+		}
+	};
 
 	// Create a single selector that matches all desired content elements:
 	// headings (h1-h6), paragraphs (p), and specific divs (div.subtitle)

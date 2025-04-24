@@ -15,6 +15,10 @@
           inherit system overlays;
           allowUnfree = true;
         };
+        rust = pkgs.rust-bin.nightly."2025-04-23".default.override {
+          extensions = [ "rust-src" "rust-analyzer" "rust-docs" "rustc-codegen-cranelift-preview" ];
+        };
+
 
         manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
         pname = manifest.name;
@@ -25,7 +29,7 @@
           inherit pkgs;
           lastSupportedVersion = "nightly-2025-03-13";
           jobsErrors = [ "rust-tests" "rust-miri" ];
-          jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sort" "tokei" ];
+          jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
         };
         readme = v-utils.readme-fw {
           inherit pkgs pname;
@@ -38,7 +42,6 @@
       {
         packages =
           let
-            rust = (pkgs.rust-bin.fromRustupToolchainFile ./.cargo/rust-toolchain.toml);
             rustc = rust;
             cargo = rust;
             rustPlatform = pkgs.makeRustPlatform {
@@ -52,7 +55,7 @@
 
               buildInputs = with pkgs; [
                 openssl.dev
-								pkg-config
+                pkg-config
               ];
               nativeBuildInputs = with pkgs; [ pkg-config ];
 
@@ -95,7 +98,7 @@
               mold-wrapped
               openssl
               pkg-config
-              (rust-bin.fromRustupToolchainFile ./.cargo/rust-toolchain.toml)
+              rust
             ] ++ pre-commit-check.enabledPackages;
           };
       }

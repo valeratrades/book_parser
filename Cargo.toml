@@ -21,17 +21,17 @@ get_last_with_len = "allow"
 
 [dependencies]
 ask_llm = "^0.1.2"
-clap = { version = "4.5.32", features = ["derive"] }
+clap = { version = "^4.5.37", features = ["derive"] }
 color-eyre = "^0.6.3"
 derive-new = "^0"
 derive_more = { version = "2.0.1", features = ["from_str"] }
-reqwest = "0.12.14"
+reqwest = "^0.12.15"
 scraper = "^0.23.1"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
-tracing = "0.1.41"
-v_utils = { version = "^2.6.2" }
+serde = { version = "^1.0.219", features = ["derive"] }
+serde_json = "^1.0.140"
+tokio = { version = "^1.44.2", features = ["macros", "rt-multi-thread"] }
+tracing = "^0.1.41"
+v_utils = { version = "^2.6.4" }
 
 [[example]]
 name = "test"
