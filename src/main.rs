@@ -81,10 +81,10 @@ async fn parse(url: &str, css_selector_strings: Vec<String>) -> Result<Vec<Strin
 					break container
 				},
 				None => {
+					i += 1;
 					if i >= css_selectors.len() {
 						bail!("No matching container found for any of the provided CSS selectors");
 					}
-					i += 1;
 				}
 			}
 		}
