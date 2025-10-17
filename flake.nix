@@ -6,7 +6,8 @@
     pre-commit-hooks.url = "github:cachix/git-hooks.nix";
     v-utils.url = "github:valeratrades/.github";
   };
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v-utils }:
+
+  outputs = { nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v-utils, ... }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
@@ -15,29 +16,17 @@
           inherit system overlays;
           allowUnfree = true;
         };
-        rust = pkgs.rust-bin.nightly."2025-04-23".default.override {
+        rust = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
           extensions = [ "rust-src" "rust-analyzer" "rust-docs" "rustc-codegen-cranelift-preview" ];
-        };
-
+        });
 
         manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
         pname = manifest.name;
         pre-commit-check = pre-commit-hooks.lib.${system}.run (v-utils.files.preCommit { inherit pkgs; });
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
 
-        workflowContents = v-utils.ci {
-          inherit pkgs;
-          lastSupportedVersion = "nightly-2025-03-13";
-          jobsErrors = [ "rust-tests" "rust-miri" ];
-          jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
-        };
-        readme = v-utils.readme-fw {
-          inherit pkgs pname;
-          lastSupportedVersion = "nightly-1.86";
-          rootDir = ./.;
-          licenses = [{ name = "Blue Oak 1.0.0"; outPath = "LICENSE"; }];
-          badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
-        };
+        workflowContents = v-utils.ci { inherit pkgs; lastSupportedVersion = "nightly-2025-10-12"; jobsErrors = [ "rust-tests" ]; jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ]; };
+        readme = v-utils.readme-fw { inherit pkgs pname; lastSupportedVersion = "nightly-1.92"; rootDir = ./.; licenses = [{ name = "Blue Oak 1.0.0"; outPath = "LICENSE"; }]; badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ]; };
       in
       {
         packages =
@@ -82,17 +71,19 @@
                 cp -f ${(v-utils.hooks.preCommit) { inherit pkgs pname; }} ./.git/hooks/custom.sh
 
                 mkdir -p ./.cargo
-                cp -f ${(v-utils.files.rust.config { inherit pkgs; })} ./.cargo/config.toml
-                cp -f ${(v-utils.files.rust.clippy { inherit pkgs; })} ./.cargo/.clippy.toml
-                cp -f ${ (v-utils.files.rust.toolchain { inherit pkgs; }) } ./.cargo/rust-toolchain.toml
-                cp -f ${(v-utils.files.rust.rustfmt { inherit pkgs; })} ./.rustfmt.toml
-                cp -f ${(v-utils.files.rust.deny { inherit pkgs; })} ./deny.toml
-                cp -f ${ (v-utils.files.gitignore { inherit pkgs; langs = [ "rs" ]; }) } ./.gitignore
+                cp -f ${(v-utils.files.rust.rustfmt {inherit pkgs;})} ./rustfmt.toml
+                cp -f ${(v-utils.files.rust.deny {inherit pkgs;})} ./deny.toml
+                cp -f ${(v-utils.files.rust.config {inherit pkgs;})} ./.cargo/config.toml
+                cp -f ${(v-utils.files.rust.toolchain {inherit pkgs;})} ./.cargo/rust-toolchain.toml
+                cp -f ${(v-utils.files.gitignore { inherit pkgs; langs = ["rs"];})} ./.gitignore
 
                 cp -f ${readme} ./README.md
-
-                alias qr="./target/debug/${pname}"
               '';
+
+            env = {
+              RUST_BACKTRACE = 1;
+              RUST_LIB_BACKTRACE = 0;
+            };
 
             packages = [
               mold-wrapped
@@ -100,9 +91,6 @@
               pkg-config
               rust
             ] ++ pre-commit-check.enabledPackages;
-
-						env.RUST_BACKTRACE = 1;
-						env.RUST_LIB_BACKTRACE = 0;
           };
       }
     );
