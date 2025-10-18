@@ -1,3 +1,5 @@
+use std::fs;
+
 use clap::Parser;
 use color_eyre::eyre::{Result, bail, eyre};
 use reqwest::Client;
@@ -7,28 +9,40 @@ use scraper::{Html, Selector};
 #[command(author, version, about, long_about = None)]
 struct Cli {
 	/// The URL of the page to scrape
-	#[clap(short, long)]
-	url: String,
+	#[clap(short, long, conflicts_with = "file")]
+	url: Option<String>,
 	/// The CSS selector of the container element. Ex: ".page_text". Multiple can be provided, which will be iterated over until the first match.
-	#[clap(short, long)]
+	#[clap(short, long, requires = "url")]
 	css_selectors: Vec<String>,
+	/// Path to a text file to process directly (bypasses URL scraping)
+	#[clap(short, long, conflicts_with = "url")]
+	file: Option<String>,
 	/// Language to translate to (using llms). Ex: "German"
 	#[clap(short, long)]
 	language: Option<String>,
 }
-#[derive(Debug, Clone, Copy, derive_more::FromStr)]
-enum ServerProtocol {
-	Wayland,
-	X11,
-}
+//DEPRECATE
+//#[derive(Debug, Clone, Copy, derive_more::FromStr)]
+//enum ServerProtocol {
+//	Wayland,
+//	X11,
+//}
 
 #[tokio::main]
 async fn main() {
 	v_utils::clientside!();
 	let cli: Cli = Cli::parse();
 
-	let content_blocks = parse(&cli.url, cli.css_selectors).await.unwrap();
-	let mut text = content_blocks.join("\n\n");
+	let mut text = if let Some(file_path) = cli.file {
+		// Read text directly from file
+		fs::read_to_string(&file_path).unwrap_or_else(|e| panic!("Failed to read file '{}': {}", file_path, e))
+	} else if let Some(url) = cli.url {
+		// Parse content from URL
+		let content_blocks = parse(&url, cli.css_selectors).await.unwrap();
+		content_blocks.join("\n\n")
+	} else {
+		panic!("Either --url or --file must be provided");
+	};
 
 	if let Some(lang) = cli.language {
 		text = translate(text, lang).await.unwrap();
