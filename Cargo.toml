@@ -7,18 +7,6 @@ edition = "2024"
 [package.metadata.docs.rs]
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 
-[lints.clippy]
-# Stable
-float_cmp = "allow" # is bad for `==` direct comparisons, but `<` and `>` should be allowed
-len_zero = "allow" # `.empty()` is O(1) but on &str only
-undocumented_unsafe_blocks = "warn"
-tabs_in_doc_comments = "allow"
-
-# Questionable
-# const fns, so actually more performant
-get_first = "allow"
-get_last_with_len = "allow"
-
 [dependencies]
 ask_llm = "^0.1.2"
 clap = { version = "^4.5.37", features = ["derive"] }
@@ -32,6 +20,18 @@ serde_json = "^1.0.140"
 tokio = { version = "^1.44.2", features = ["macros", "rt-multi-thread"] }
 tracing = "^0.1.41"
 v_utils = { version = "^2.6.4" }
+
+[lints.clippy]
+# Stable
+float_cmp = "allow" # is bad for `==` direct comparisons, but `<` and `>` should be allowed
+len_zero = "allow" # `.empty()` is O(1) but on &str only
+undocumented_unsafe_blocks = "warn"
+tabs_in_doc_comments = "allow"
+
+# Questionable
+# const fns, so actually more performant
+get_first = "allow"
+get_last_with_len = "allow"
 
 [[example]]
 name = "test"
