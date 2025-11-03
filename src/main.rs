@@ -22,7 +22,7 @@ struct Cli {
 	language: Option<String>,
 }
 //DEPRECATE
-//#[derive(Debug, Clone, Copy, derive_more::FromStr)]
+//#[derive(Clone, Copy, Debug, derive_more::FromStr)]
 //enum ServerProtocol {
 //	Wayland,
 //	X11,

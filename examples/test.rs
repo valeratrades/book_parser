@@ -10,7 +10,7 @@ struct TranslationRequest {
 	format: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TranslatedText {
 	translated_text: String,
@@ -21,7 +21,7 @@ struct TranslationResponse {
 	data: TranslationResponseData,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 struct TranslationResponseData {
 	translations: Vec<TranslatedText>,
 }
