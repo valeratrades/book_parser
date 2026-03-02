@@ -8,18 +8,22 @@ edition = "2024"
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 
 [dependencies]
-ask_llm = "^0.1.2"
+ask_llm = { version = "~2.1.7", default-features = false }
 clap = { version = "^4.5.37", features = ["derive"] }
-color-eyre = "^0.6.3"
-derive-new = "^0"
-derive_more = { version = "2.0.1", features = ["from_str"] }
-reqwest = "^0.12.15"
-scraper = "^0.23.1"
-serde = { version = "^1.0.219", features = ["derive"] }
-serde_json = "^1.0.140"
-tokio = { version = "^1.44.2", features = ["macros", "rt-multi-thread"] }
-tracing = "^0.1.41"
-v_utils = { version = "^2.6.4" }
+color-eyre = "^0.6.5"
+dirs = "^6"
+futures = "^0.3"
+miette = { version = "7.6.0", features = ["fancy", "syntect-highlighter", "serde"] }
+quick-xml = "^0.39"
+regex = "^1"
+reqwest = { version = "^0.13.2", default-features = false, features = ["json", "charset", "http2"] }
+scraper = "^0.25.0"
+serde = { version = "^1.0.228", features = ["derive"] }
+serde_json = "^1.0.149"
+tokio = { version = "^1.49.0", features = ["macros", "rt-multi-thread", "process", "fs", "io-util", "time"] }
+tracing = "^0.1.44"
+v_utils = { version = "^2.15.30" }
+zip = "^8"
 
 [lints.clippy]
 # Stable

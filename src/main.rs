@@ -1,157 +1,157 @@
-use std::fs;
+use std::path::PathBuf;
 
-use clap::Parser;
-use color_eyre::eyre::{Result, bail, eyre};
-use reqwest::Client;
-use scraper::{Html, Selector};
+use clap::{Parser, Subcommand, ValueEnum};
+use color_eyre::eyre::Result;
 
-#[derive(Debug, Parser)]
-#[command(author, version, about, long_about = None)]
+mod annotate;
+mod compile;
+mod load;
+mod parse;
+mod section;
+mod translate;
+
+#[derive(Parser)]
+#[command(author, version, about = "Book processing pipeline")]
 struct Cli {
-	/// The URL of the page to scrape
-	#[clap(short, long, conflicts_with = "file")]
-	url: Option<String>,
-	/// The CSS selector of the container element. Ex: ".page_text". Multiple can be provided, which will be iterated over until the first match.
-	#[clap(short, long, requires = "url")]
-	css_selectors: Vec<String>,
-	/// Path to a text file to process directly (bypasses URL scraping)
-	#[clap(short, long, conflicts_with = "url")]
-	file: Option<String>,
-	/// Language to translate to (using llms). Ex: "German"
-	#[clap(short, long)]
-	language: Option<String>,
+	/// Base directory for all books
+	#[arg(long, default_value_os_t = default_dir())]
+	dir: PathBuf,
+	/// Max parallel jobs
+	#[arg(long, default_value_t = 2)]
+	max_jobs: usize,
+	/// Overwrite existing files instead of skipping
+	#[arg(long)]
+	force: bool,
+	#[command(subcommand)]
+	cmd: Cmd,
 }
-//DEPRECATE
-//#[derive(Clone, Copy, Debug, derive_more::FromStr)]
-//enum ServerProtocol {
-//	Wayland,
-//	X11,
-//}
 
-#[tokio::main]
-async fn main() {
+fn default_dir() -> PathBuf {
+	dirs::home_dir().expect("no home directory").join("tmp/process_book")
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+	/// Ingest a book from a local file or URL
+	From {
+		#[command(subcommand)]
+		source: FromCmd,
+	},
+	/// Apply a processing stage to sections
+	Apply {
+		#[command(subcommand)]
+		stage: ApplyCmd,
+	},
+	/// Assemble sections into epub/md
+	Compile {
+		/// Book name (directory under --dir)
+		name: String,
+		/// Output format
+		#[arg(short, long, default_value = "epub")]
+		format: OutputFormat,
+	},
+}
+
+#[derive(Subcommand)]
+enum FromCmd {
+	/// Split a local book file into sections
+	Parse {
+		/// Input book file (.txt, .fb2, or .epub)
+		#[arg(short, long)]
+		file: PathBuf,
+		/// Chapter heading pattern regex (for .txt files)
+		#[arg(long)]
+		chapter_pattern: Option<String>,
+	},
+	/// Scrape pages from a URL range
+	///
+	/// URL format: https://site.com/b/12345/read#t1..100
+	Load {
+		/// URL with trailing range, e.g. https://example.com/b/123/read#t1..50
+		url: String,
+		/// CSS selectors for content extraction (can be repeated)
+		#[arg(short, long)]
+		css: Vec<String>,
+		/// Parallel page downloads per chunk
+		#[arg(long, default_value_t = 16)]
+		parallel: usize,
+		/// Seconds to wait between chunks
+		#[arg(long, default_value_t = 0)]
+		timeout: u64,
+	},
+}
+
+#[derive(Subcommand)]
+enum ApplyCmd {
+	/// LLM-translate sections
+	Translate {
+		/// Book name (directory under --dir)
+		name: String,
+		/// Target language
+		#[arg(short, long)]
+		language: String,
+		/// Section range, e.g. 1..50, 1..=50, 5.., ..=20
+		#[arg(short, long)]
+		range: Option<String>,
+	},
+	/// Annotate infrequent words (via translate_infrequent)
+	Annotate {
+		/// Book name (directory under --dir)
+		name: String,
+		/// Target language
+		#[arg(short, long)]
+		language: String,
+		/// Word frequency limit
+		#[arg(short, long)]
+		wlimit: String,
+		/// Section range
+		#[arg(short, long)]
+		range: Option<String>,
+	},
+}
+
+#[derive(Clone, ValueEnum)]
+enum OutputFormat {
+	Epub,
+	Md,
+	Markdown,
+}
+
+impl std::fmt::Display for OutputFormat {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			OutputFormat::Epub => write!(f, "epub"),
+			OutputFormat::Md | OutputFormat::Markdown => write!(f, "md"),
+		}
+	}
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> Result<()> {
 	v_utils::clientside!();
-	let cli: Cli = Cli::parse();
+	let cli = Cli::parse();
 
-	let mut text = if let Some(file_path) = cli.file {
-		// Read text directly from file
-		fs::read_to_string(&file_path).unwrap_or_else(|e| panic!("Failed to read file '{}': {}", file_path, e))
-	} else if let Some(url) = cli.url {
-		// Parse content from URL
-		let content_blocks = parse(&url, cli.css_selectors).await.unwrap();
-		content_blocks.join("\n\n")
-	} else {
-		panic!("Either --url or --file must be provided");
-	};
-
-	if let Some(lang) = cli.language {
-		text = translate(text, lang).await.unwrap();
-	}
-
-	println!("{text:#}");
-}
-
-//Q: potentially switch to DeepL API
-async fn translate(text: String, language: String) -> Result<String> {
-	let q = format!("Translate provided text to {language}: ```{text}```. Output as a codeblock.",);
-	let answer = ask_llm::oneshot(q, ask_llm::Model::Medium).await.unwrap();
-	tracing::info!("request cost (cents): {}", answer.cost_cents);
-	let codeblock = answer
-		.extract_codeblock(None)
-		.map_err(|_| eyre!("LLM has faltered and wasn't able to provide a codeblock with translated text"))?;
-	Ok(codeblock)
-}
-
-async fn parse(url: &str, css_selector_strings: Vec<String>) -> Result<Vec<String>> {
-	let client = Client::builder()
-		// Using a common browser user agent can help avoid blocking by some websites
-		.user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-		.build()?;
-
-	let response = client.get(url).send().await?;
-
-	// Ensure the request was successful
-	if !response.status().is_success() {
-		bail!("Failed to retrieve the webpage. Status code: {}", response.status());
-	}
-
-	let html_content = response.text().await?;
-	let document = Html::parse_document(&html_content);
-
-	let mut css_selectors = Vec::with_capacity(css_selector_strings.len());
-	for s in css_selector_strings.iter() {
-		let selector = Selector::parse(s).map_err(|e| eyre!("Invalid CSS selector: {}. Error: {}", s, e))?;
-		css_selectors.push(selector);
-	}
-
-	let container = {
-		assert!(css_selectors.len() > 0, "No CSS selectors provided");
-		let mut i = 0;
-		loop {
-			match document.select(&css_selectors[i]).next() /*We assume there's only one main container matching the selector*/
-			{
-				Some(container) => {
-					tracing::info!("Got a match on css selector: {}", css_selector_strings[i]);
-					break container
-				},
-				None => {
-					i += 1;
-					if i >= css_selectors.len() {
-						bail!("No matching container found for any of the provided CSS selectors");
-					}
-				}
+	match cli.cmd {
+		Cmd::From { source } => match source {
+			FromCmd::Parse { file, chapter_pattern } => {
+				parse::run(&file, chapter_pattern.as_deref(), &cli.dir)?;
 			}
-		}
-	};
-
-	// Create a single selector that matches all desired content elements:
-	// headings (h1-h6), paragraphs (p), and specific divs (div.subtitle)
-	// The scraper `select` method inherently returns elements in their document order.
-	let content_selector = Selector::parse("h1, h2, h3, h4, h5, h6, p, div.subtitle") // Added div.subtitle here
-		.map_err(|e| eyre!("Internal error: Invalid content block selector: {}", e))?; // This selector should always be valid
-
-	let mut content_blocks = Vec::new();
-
-	// Iterate through all matching elements within the container, preserving document order
-	for element in container.select(&content_selector) {
-		// Extract and clean up the text content of the element
-		let text = element.text().collect::<Vec<_>>().join("").trim().to_string();
-
-		// Skip elements that contain only whitespace or are empty
-		if text.is_empty() {
-			continue;
-		}
-
-		// Get the HTML tag name (e.g., "h1", "p", "div") to determine formatting
-		let tag_name = element.value().name();
-
-		// Format the text based on the element's tag type
-		let formatted_block = match tag_name {
-			"p" => text,
-			"h1" => format!("# {}", text),
-			"h2" => format!("## {}", text),
-			"h3" => format!("### {}", text),
-			"h4" => format!("#### {}", text),
-			"h5" => format!("##### {}", text),
-			"h6" => format!("###### {}", text),
-			"div" => {
-				// a website I care to scrape has this delimiter standard.
-				if element.value().has_class("subtitle", scraper::CaseSensitivity::CaseSensitive) && text == "* * *" {
-					"#### * * *".to_owned()
-				} else {
-					continue;
-				}
+			FromCmd::Load { url, css, parallel, timeout } => {
+				load::run(&url, &css, parallel, timeout, cli.force, &cli.dir).await?;
 			}
-			_ => continue, // Should not happen with our specific selector, but acts as a safeguard
-		};
-
-		content_blocks.push(formatted_block);
+		},
+		Cmd::Apply { stage } => match stage {
+			ApplyCmd::Translate { name, language, range } => {
+				translate::run(&name, &language, range.as_deref(), cli.max_jobs, cli.force, &cli.dir).await?;
+			}
+			ApplyCmd::Annotate { name, language, wlimit, range } => {
+				annotate::run(&name, &language, &wlimit, range.as_deref(), cli.max_jobs, cli.force, &cli.dir).await?;
+			}
+		},
+		Cmd::Compile { name, format } => {
+			compile::run(&name, &format.to_string(), cli.force, &cli.dir)?;
+		}
 	}
 
-	// Check if any content was actually extracted
-	if content_blocks.is_empty() {
-		bail!("No content blocks (paragraphs, headings, or subtitles) found in the specified container");
-	}
-
-	Ok(content_blocks)
+	Ok(())
 }

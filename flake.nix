@@ -4,10 +4,10 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
     pre-commit-hooks.url = "github:cachix/git-hooks.nix";
-    v-utils.url = "github:valeratrades/.github";
+    v-utils.url = "github:valeratrades/.github?ref=v1.3";
   };
 
-  outputs = { nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v-utils, ... }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v-utils }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
@@ -25,8 +25,22 @@
         pre-commit-check = pre-commit-hooks.lib.${system}.run (v-utils.files.preCommit { inherit pkgs; });
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
 
-        workflowContents = v-utils.ci { inherit pkgs; lastSupportedVersion = "nightly-2025-10-10"; jobsErrors = [ "rust-tests" ]; jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ]; };
-        readme = v-utils.readme-fw { inherit pkgs pname; lastSupportedVersion = "nightly-1.92"; rootDir = ./.; licenses = [{ name = "Blue Oak 1.0.0"; outPath = "LICENSE"; }]; badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ]; };
+        github = v-utils.github {
+          inherit pkgs pname;
+          lastSupportedVersion = "nightly-2025-10-10";
+          jobsErrors = [ "rust-tests" ];
+          jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
+          jobsOther = [ "loc-badge" ];
+          langs = [ "rs" ];
+        };
+        rs = v-utils.rs { inherit pkgs; };
+        readme = v-utils.readme-fw {
+          inherit pkgs pname;
+          lastSupportedVersion = "nightly-1.92";
+          rootDir = ./.;
+          licenses = [{ name = "Blue Oak 1.0.0"; outPath = "LICENSE"; }];
+          badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
+        };
       in
       {
         packages =
@@ -42,10 +56,6 @@
               inherit pname;
               version = manifest.version;
 
-              buildInputs = with pkgs; [
-                openssl.dev
-                pkg-config
-              ];
               nativeBuildInputs = with pkgs; [ pkg-config ];
 
               cargoLock.lockFile = ./Cargo.lock;
@@ -58,25 +68,12 @@
           mkShell {
             inherit stdenv;
             shellHook =
-              pre-commit-check.shellHook
-              + ''
-                mkdir -p ./.github/workflows
-                rm -f ./.github/workflows/errors.yml; cp ${workflowContents.errors} ./.github/workflows/errors.yml
-                rm -f ./.github/workflows/warnings.yml; cp ${workflowContents.warnings} ./.github/workflows/warnings.yml
-
+              pre-commit-check.shellHook +
+              github.shellHook +
+              rs.shellHook +
+              ''
                 cp -f ${v-utils.files.licenses.blue_oak} ./LICENSE
-
-                cargo -Zscript -q ${v-utils.hooks.appendCustom} ./.git/hooks/pre-commit
-                cp -f ${(v-utils.hooks.treefmt) { inherit pkgs; }} ./.treefmt.toml
-                cp -f ${(v-utils.hooks.preCommit) { inherit pkgs pname; }} ./.git/hooks/custom.sh
-
-                mkdir -p ./.cargo
-                cp -f ${(v-utils.files.rust.rustfmt {inherit pkgs;})} ./rustfmt.toml
-                cp -f ${(v-utils.files.rust.deny {inherit pkgs;})} ./deny.toml
-                cp -f ${(v-utils.files.rust.config {inherit pkgs;})} ./.cargo/config.toml
-                cp -f ${(v-utils.files.rust.toolchain {inherit pkgs;})} ./.cargo/rust-toolchain.toml
-                cp -f ${(v-utils.files.gitignore { inherit pkgs; langs = ["rs"];})} ./.gitignore
-
+                cp -f ${(v-utils.files.treefmt) { inherit pkgs; }} ./.treefmt.toml
                 cp -f ${readme} ./README.md
               '';
 
@@ -86,11 +83,10 @@
             };
 
             packages = [
-              mold-wrapped
-              openssl
+              mold
               pkg-config
               rust
-            ] ++ pre-commit-check.enabledPackages;
+            ] ++ pre-commit-check.enabledPackages ++ github.enabledPackages;
           };
       }
     );
