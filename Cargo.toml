@@ -8,7 +8,7 @@ edition = "2024"
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 
 [dependencies]
-ask_llm = { version = "~2.1.7", default-features = false }
+ask_llm = { version = "~2.2.1", default-features = false }
 clap = { version = "^4.5.37", features = ["derive"] }
 color-eyre = "^0.6.5"
 dirs = "^6"
