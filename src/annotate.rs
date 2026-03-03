@@ -23,17 +23,14 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 	fs::create_dir_all(&fail_dir)?;
 
 	let all = collect_numbered(&source_dir, "section_", ".md")?;
+	let explicit_range = range.since.is_some() || range.until.is_some();
 	let sections: Vec<_> = all.into_iter().filter(|(n, _)| range.contains(*n)).collect();
 
 	println!(
 		"annotating {} sections from {}{}",
 		sections.len(),
 		Stage::Translated,
-		if range.since.is_some() || range.until.is_some() {
-			format!(" (range: {range})")
-		} else {
-			String::new()
-		}
+		if explicit_range { format!(" (range: {range})") } else { String::new() }
 	);
 
 	// main pass
@@ -48,7 +45,11 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 			to_annotate.push(*num);
 		}
 		if skipped > 0 {
-			eprintln!("warning: skipped {skipped} already-annotated sections (use --force to overwrite)");
+			if explicit_range {
+				eprintln!("warning: skipped {skipped} already-annotated sections (use --force to overwrite)");
+			} else {
+				eprintln!("skipping {skipped} already-annotated sections");
+			}
 		}
 		for chunk in to_annotate.chunks(max_jobs) {
 			let futs: Vec<_> = chunk.iter().map(|&num| annotate_section(num, language, wlimit, &source_dir, &annotated_dir, &fail_dir)).collect();
