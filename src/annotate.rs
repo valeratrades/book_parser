@@ -5,6 +5,18 @@ use tokio::process::Command;
 
 use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, shell_escape};
 
+async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>) -> u32 {
+	let results = futures::future::join_all(futs).await;
+	let mut failed = 0u32;
+	for r in results {
+		if let Err(e) = r {
+			eprintln!("  {e}");
+			failed += 1;
+		}
+	}
+	failed
+}
+
 pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, max_jobs: usize, force: bool, dir: &Path) -> Result<()> {
 	let root = book_root(dir, name);
 	let source_dir = root.join(Stage::Translated.dir_name());
@@ -33,6 +45,8 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 		if explicit_range { format!(" (range: {range})") } else { String::new() }
 	);
 
+	let mut total_failed = 0u32;
+
 	// main pass
 	{
 		let mut to_annotate: Vec<u32> = Vec::new();
@@ -53,7 +67,7 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 		}
 		for chunk in to_annotate.chunks(max_jobs) {
 			let futs: Vec<_> = chunk.iter().map(|&num| annotate_section(num, language, wlimit, &source_dir, &annotated_dir, &fail_dir)).collect();
-			futures::future::try_join_all(futs).await?;
+			total_failed += run_batch(futs).await;
 		}
 	}
 
@@ -72,10 +86,13 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 		}
 		for chunk in to_retry.chunks(max_jobs) {
 			let futs: Vec<_> = chunk.iter().map(|&num| annotate_section(num, language, wlimit, &source_dir, &annotated_dir, &fail_dir)).collect();
-			futures::future::try_join_all(futs).await?;
+			total_failed += run_batch(futs).await;
 		}
 	}
 
+	if total_failed > 0 {
+		return Err(eyre!("{total_failed} sections failed to annotate (see .fail files). Re-run to retry."));
+	}
 	println!("annotation done");
 	Ok(())
 }

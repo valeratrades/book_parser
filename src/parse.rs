@@ -21,6 +21,7 @@ pub fn run(file: &Path, chapter_pattern: Option<&str>, dir: &Path) -> Result<()>
 		_ => return Err(eyre!("unsupported extension '.{ext}', expected .txt, .fb2, or .epub")),
 	}
 	let stem = file.file_stem().ok_or_else(|| eyre!("input file has no stem"))?.to_string_lossy().to_string();
+	fs::write(v_utils::xdg_cache_file!("last_book_name"), &stem)?;
 
 	let root = book_root(dir, &stem);
 	let sections_dir = root.join("sections");

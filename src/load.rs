@@ -10,6 +10,7 @@ use crate::section::{book_root, decode_entities, enforce_contiguous, paragraphs_
 pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force: bool, dir: &Path) -> Result<()> {
 	let (url_template, start, end) = parse_load_url(url)?;
 	let name = book_name_from_url(url);
+	fs::write(v_utils::xdg_cache_file!("last_book_name"), &name)?;
 	let root = book_root(dir, &name);
 	let sections_dir = root.join("sections");
 	fs::create_dir_all(&sections_dir)?;

@@ -75,8 +75,11 @@ impl PageRange {
 }
 
 pub fn parse_range(s: &str) -> Result<PageRange> {
+	if let Ok(n) = s.parse::<u32>() {
+		return Ok(PageRange { since: Some(n), until: Some(n) });
+	}
 	let re = Regex::new(r"^(\d+)?\.\.(=?)(\d+)?$").unwrap();
-	let caps = re.captures(s).ok_or_else(|| eyre!("invalid range '{s}', expected e.g. 1..50, 1..=50, 5.., ..=20"))?;
+	let caps = re.captures(s).ok_or_else(|| eyre!("invalid range '{s}', expected e.g. 517, 1..50, 1..=50, 5.., ..=20"))?;
 	let since = caps.get(1).map(|m| m.as_str().parse::<u32>()).transpose()?;
 	let inclusive = &caps[2] == "=";
 	let end_raw = caps.get(3).map(|m| m.as_str().parse::<u32>()).transpose()?;

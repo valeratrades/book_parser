@@ -9,7 +9,7 @@ use zip::{ZipWriter, write::FileOptions};
 
 use crate::section::{PageRange, Stage, book_root, collect_numbered, escape_xml, md_title};
 
-pub fn run(name: &str, format: &str, force: bool, dir: &Path) -> Result<()> {
+pub fn run(name: &str, format: &str, force: bool, dir: &Path, out_dir: &Path) -> Result<()> {
 	let root = book_root(dir, name);
 
 	let (stage, sections) = Stage::resolve_latest(root)?;
@@ -37,7 +37,7 @@ pub fn run(name: &str, format: &str, force: bool, dir: &Path) -> Result<()> {
 		"md" | "markdown" => "md",
 		_ => return Err(eyre!("unsupported format '{format}', expected epub or md")),
 	};
-	let out_path = root.join(format!("out{range}.{out_ext}"));
+	let out_path = out_dir.join(format!("{name}{range}.{out_ext}"));
 
 	if out_path.exists() && !force {
 		return Err(eyre!("output file '{}' already exists (use --force to overwrite)", out_path.display()));
