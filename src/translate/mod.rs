@@ -195,7 +195,7 @@ fn chunk_plaintext(text: &str) -> Vec<&str> {
 	let mut offset = 0;
 
 	for _ in 0..n_chunks - 1 {
-		let target = offset + CHUNK_LIMIT;
+		let target = text.floor_char_boundary(offset + CHUNK_LIMIT);
 		// step back from target to find the last newline (paragraph boundary)
 		let cut = match text[offset..target].rfind('\n') {
 			Some(pos) => offset + pos + 1, // include the newline in the current chunk
