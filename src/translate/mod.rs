@@ -119,7 +119,9 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 	let explicit_range = range.since.is_some() || range.until.is_some();
 	let sections: Vec<_> = all.into_iter().filter(|(n, _)| range.contains(*n)).collect();
 
-	let client = ask_llm::Client::default().model(ask_llm::Model::Translate);
+	// Cap output tokens so a degenerate repetition loop fails fast instead of burning 10+ minutes.
+	// Very generous ceiling: even if every output char maps to 1 token (worst case), this is still well above any real translation.
+	let max_output_tokens = CHUNK_LIMIT * MAX_EXPANSION as usize;
 	let mut total_failed = 0u32;
 
 	// main pass
@@ -143,7 +145,7 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 		for chunk in to_translate.chunks(max_jobs) {
 			let futs: Vec<_> = chunk
 				.iter()
-				.map(|(num, path)| translate_section(&client, path, *num, language, &translated_dir, &fail_dir))
+				.map(|(num, path)| translate_section(path, *num, language, max_output_tokens, &translated_dir, &fail_dir))
 				.collect();
 			total_failed += run_batch(futs).await;
 		}
@@ -165,7 +167,7 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 		for chunk in to_retry.chunks(max_jobs) {
 			let futs: Vec<_> = chunk
 				.iter()
-				.map(|(num, path)| translate_section(&client, path, *num, language, &translated_dir, &fail_dir))
+				.map(|(num, path)| translate_section(path, *num, language, max_output_tokens, &translated_dir, &fail_dir))
 				.collect();
 			total_failed += run_batch(futs).await;
 		}
@@ -204,7 +206,10 @@ fn chunk_plaintext(text: &str) -> Vec<&str> {
 	chunks
 }
 
-async fn translate_section(client: &ask_llm::Client, section: &Path, num: u32, language: &str, out_dir: &Path, fail_dir: &Path) -> Result<()> {
+/// Temperatures to try for each chunk: default (0.0), then increasing jitter to escape repetition loops.
+const RETRY_TEMPERATURES: [f32; 3] = [0.0, 0.05, 0.15];
+
+async fn translate_section(section: &Path, num: u32, language: &str, max_output_tokens: usize, out_dir: &Path, fail_dir: &Path) -> Result<()> {
 	let md = fs::read_to_string(section)?;
 	let plaintext = md_to_plaintext(&md);
 	let chunks = chunk_plaintext(&plaintext);
@@ -217,32 +222,48 @@ async fn translate_section(client: &ask_llm::Client, section: &Path, num: u32, l
 	let mut translated_parts: Vec<String> = Vec::with_capacity(n_chunks);
 	for (i, chunk) in chunks.into_iter().enumerate() {
 		let q = format!("Translate provided text to {language}: ```{chunk}```. Output as a codeblock.");
-		let answer = match client.ask(q).await {
-			Ok(a) => a,
-			Err(e) => {
-				fs::write(fail_dir.join(format!("section_{num}.fail")), format!("{num}\n"))?;
-				return Err(eyre!("LLM failed for section {num} chunk {i}: {e}"));
-			}
-		};
-		tracing::info!("section {num} chunk {}/{n_chunks} cost (cents): {}", i + 1, answer.cost_cents);
 
-		let part = match answer.extract_codeblock(None) {
-			Ok(cb) => cb,
-			Err(_) => {
-				fs::write(fail_dir.join(format!("section_{num}.fail")), format!("{num}\n"))?;
-				return Err(eyre!("LLM failed to produce codeblock for section {num} chunk {i}"));
+		let mut last_err = None;
+		for (attempt, &temp) in RETRY_TEMPERATURES.iter().enumerate() {
+			let client = ask_llm::Client::default().model(ask_llm::Model::Translate).max_tokens(max_output_tokens).temperature(temp);
+
+			let answer = match client.ask(q.clone()).await {
+				Ok(a) => a,
+				Err(e) => {
+					last_err = Some(format!("LLM failed for section {num} chunk {i}: {e}"));
+					tracing::warn!("section {num} chunk {i} attempt {attempt} (temp={temp}): LLM error, retrying");
+					continue;
+				}
+			};
+			tracing::info!("section {num} chunk {}/{n_chunks} cost (cents): {}", i + 1, answer.cost_cents);
+
+			let part = match answer.extract_codeblock(None) {
+				Ok(cb) => cb,
+				Err(_) => {
+					last_err = Some(format!("LLM failed to produce codeblock for section {num} chunk {i}"));
+					tracing::warn!("section {num} chunk {i} attempt {attempt} (temp={temp}): no codeblock, retrying");
+					continue;
+				}
+			};
+			let ratio = part.len() as f32 / chunk.len().max(1) as f32;
+			if ratio > MAX_EXPANSION {
+				last_err = Some(format!(
+					"section {num} chunk {i}: translated output is {ratio:.1}× the input size ({} vs {} chars) — likely model repetition loop",
+					part.len(),
+					chunk.len()
+				));
+				tracing::warn!("section {num} chunk {i} attempt {attempt} (temp={temp}): {ratio:.1}× expansion, retrying");
+				continue;
 			}
-		};
-		let ratio = part.len() as f32 / chunk.len().max(1) as f32;
-		if ratio > MAX_EXPANSION {
-			fs::write(fail_dir.join(format!("section_{num}.fail")), format!("{num}\n"))?;
-			return Err(eyre!(
-				"section {num} chunk {i}: translated output is {ratio:.1}× the input size ({} vs {} chars) — likely model repetition loop",
-				part.len(),
-				chunk.len()
-			));
+
+			last_err = None;
+			translated_parts.push(part);
+			break;
 		}
-		translated_parts.push(part);
+		if let Some(err) = last_err {
+			fs::write(fail_dir.join(format!("section_{num}.fail")), format!("{num}\n"))?;
+			return Err(eyre!("{err}"));
+		}
 	}
 
 	let translated = translated_parts.join("\n");

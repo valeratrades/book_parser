@@ -1,14 +1,6 @@
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
-
-#[derive(Serialize)]
-struct TranslationRequest {
-	q: Vec<String>,
-	source: String,
-	target: String,
-	format: String,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
