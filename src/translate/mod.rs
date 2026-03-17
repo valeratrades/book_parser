@@ -8,9 +8,9 @@ use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, 
 #[cfg(test)]
 mod tests;
 
-const CHUNK_LIMIT: usize = 5000;
+pub const CHUNK_LIMIT: usize = 5000;
 /// If a translated chunk is longer than this multiple of its input, the model degenerated (repetition loop).
-const MAX_EXPANSION: f32 = 3.0;
+pub const MAX_EXPANSION: f32 = 3.0;
 const OLLAMA_BASE: &str = "http://localhost:11434";
 const OLLAMA_MODEL: &str = "translategemma:4b";
 
@@ -25,7 +25,7 @@ async fn ollama_reachable() -> bool {
 
 /// Verify Ollama is running and the translate model is available.
 /// Offers to start Ollama and/or pull the model if needed.
-async fn preflight_ollama(yes: bool) -> Result<()> {
+pub async fn preflight_ollama(yes: bool) -> Result<()> {
 	if !ollama_reachable().await {
 		if !yes && confirmation("Ollama is not running. Start it?").flush().await != ConfirmResult::Yes {
 			return Err(eyre!("Ollama is not reachable at {OLLAMA_BASE}"));
@@ -156,13 +156,12 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 		let fails = glob_fails(&fail_dir)?;
 		let mut to_retry: Vec<(u32, std::path::PathBuf)> = Vec::new();
 		for fail in fails {
-			let num: u32 = fs::read_to_string(&fail)?.trim().parse()?;
-			if !range.contains(num) {
+			if !range.contains(fail.num) {
 				continue;
 			}
-			let _ = fs::remove_file(translated_dir.join(format!("section_{num}.md")));
-			let _ = fs::remove_file(&fail);
-			to_retry.push((num, sections_dir.join(format!("section_{num}.md"))));
+			let _ = fs::remove_file(translated_dir.join(format!("section_{}.md", fail.num)));
+			let _ = fs::remove_file(&fail.path);
+			to_retry.push((fail.num, sections_dir.join(format!("section_{}.md", fail.num))));
 		}
 		for chunk in to_retry.chunks(max_jobs) {
 			let futs: Vec<_> = chunk
@@ -209,7 +208,7 @@ fn chunk_plaintext(text: &str) -> Vec<&str> {
 /// Temperatures to try for each chunk: default (0.0), then increasing jitter to escape repetition loops.
 const RETRY_TEMPERATURES: [f32; 3] = [0.0, 0.05, 0.15];
 
-async fn translate_section(section: &Path, num: u32, language: &str, max_output_tokens: usize, out_dir: &Path, fail_dir: &Path) -> Result<()> {
+pub async fn translate_section(section: &Path, num: u32, language: &str, max_output_tokens: usize, out_dir: &Path, fail_dir: &Path) -> Result<()> {
 	let md = fs::read_to_string(section)?;
 	let plaintext = md_to_plaintext(&md);
 	let chunks = chunk_plaintext(&plaintext);
@@ -261,7 +260,7 @@ async fn translate_section(section: &Path, num: u32, language: &str, max_output_
 			break;
 		}
 		if let Some(err) = last_err {
-			fs::write(fail_dir.join(format!("section_{num}.fail")), format!("{num}\n"))?;
+			fs::write(fail_dir.join(format!("section_{num}.fail")), format!("translate\nlanguage={language}\n"))?;
 			return Err(eyre!("{err}"));
 		}
 	}

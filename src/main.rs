@@ -8,6 +8,7 @@ mod annotate;
 mod compile;
 mod load;
 mod parse;
+mod retry;
 mod section;
 mod translate;
 
@@ -120,6 +121,8 @@ enum ApplyCmd {
 		#[arg(short, long)]
 		range: Option<String>,
 	},
+	/// Retry all failed sections (reads settings from .fail files)
+	Retry,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -181,6 +184,9 @@ async fn main() -> Result<()> {
 				}
 				ApplyCmd::Annotate { language, wlimit, range } => {
 					annotate::run(&name, &language, &wlimit, range.as_deref(), cli.max_jobs, cli.force, &cli.dir).await?;
+				}
+				ApplyCmd::Retry => {
+					retry::run(&name, cli.max_jobs, cli.force, cli.yes, &cli.dir).await?;
 				}
 			}
 		}

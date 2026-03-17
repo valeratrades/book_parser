@@ -138,7 +138,21 @@ pub fn collect_numbered(dir: &Path, prefix: &str, suffix: &str) -> Result<Vec<(u
 	Ok(v)
 }
 
-pub fn glob_fails(dir: &Path) -> Result<Vec<PathBuf>> {
+pub struct FailInfo {
+	pub num: u32,
+	pub stage: String,
+	pub settings: Vec<(String, String)>,
+	pub path: PathBuf,
+}
+
+impl FailInfo {
+	pub fn setting(&self, key: &str) -> Option<&str> {
+		self.settings.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+	}
+}
+
+pub fn glob_fails(dir: &Path) -> Result<Vec<FailInfo>> {
+	let num_re = Regex::new(r"section_(\d+)\.fail$").unwrap();
 	let mut v = Vec::new();
 	if !dir.exists() {
 		return Ok(v);
@@ -146,10 +160,27 @@ pub fn glob_fails(dir: &Path) -> Result<Vec<PathBuf>> {
 	for e in fs::read_dir(dir)? {
 		let e = e?;
 		let p = e.path();
-		if p.is_file() && p.extension().is_some_and(|x| x == "fail") {
-			v.push(p);
+		if !p.is_file() || !p.extension().is_some_and(|x| x == "fail") {
+			continue;
 		}
+		let fname = e.file_name().to_string_lossy().to_string();
+		let num: u32 = num_re
+			.captures(&fname)
+			.and_then(|c| c[1].parse().ok())
+			.ok_or_else(|| eyre!("cannot parse section number from fail file: {fname}"))?;
+
+		let content = fs::read_to_string(&p)?;
+		let mut lines = content.lines();
+		let stage = lines.next().ok_or_else(|| eyre!("empty .fail file: {}", p.display()))?.to_string();
+		let settings: Vec<(String, String)> = lines
+			.filter_map(|line| {
+				let (k, v) = line.split_once('=')?;
+				Some((k.to_string(), v.to_string()))
+			})
+			.collect();
+		v.push(FailInfo { num, stage, settings, path: p });
 	}
+	v.sort_by_key(|f| f.num);
 	Ok(v)
 }
 

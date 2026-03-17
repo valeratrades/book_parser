@@ -69,13 +69,12 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 		let fails = glob_fails(&fail_dir)?;
 		let mut to_retry: Vec<u32> = Vec::new();
 		for fail in fails {
-			let num: u32 = fs::read_to_string(&fail)?.trim().parse()?;
-			if !range.contains(num) {
+			if !range.contains(fail.num) {
 				continue;
 			}
-			let _ = fs::remove_file(annotated_dir.join(format!("section_{num}.md")));
-			let _ = fs::remove_file(&fail);
-			to_retry.push(num);
+			let _ = fs::remove_file(annotated_dir.join(format!("section_{}.md", fail.num)));
+			let _ = fs::remove_file(&fail.path);
+			to_retry.push(fail.num);
 		}
 		for chunk in to_retry.chunks(max_jobs) {
 			let futs: Vec<_> = chunk.iter().map(|&num| annotate_section(num, language, wlimit, &source_dir, &annotated_dir, &fail_dir)).collect();
@@ -90,7 +89,7 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 	Ok(())
 }
 
-async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir: &Path, out_dir: &Path, fail_dir: &Path) -> Result<()> {
+pub async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir: &Path, out_dir: &Path, fail_dir: &Path) -> Result<()> {
 	let source_md_path = source_dir.join(format!("section_{num}.md"));
 	let md = fs::read_to_string(&source_md_path)?;
 	let plaintext = md_to_plaintext(&md);
@@ -109,7 +108,7 @@ async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir: &P
 	let _ = fs::remove_file(&tmp_in);
 
 	if !status.success() {
-		fs::write(fail_dir.join(format!("section_{num}.fail")), format!("{num}\n"))?;
+		fs::write(fail_dir.join(format!("section_{num}.fail")), format!("annotate\nlanguage={language}\nwlimit={wlimit}\n"))?;
 		return Err(eyre!("translate_infrequent failed for section {num}"));
 	}
 
