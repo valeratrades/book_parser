@@ -1,4 +1,5 @@
 use std::{
+	collections::BTreeSet,
 	fmt, fs,
 	path::{Path, PathBuf},
 	sync::OnceLock,
@@ -58,52 +59,89 @@ impl fmt::Display for Stage {
 	}
 }
 
+/// `None` means "all sections". `Some(set)` means only those exact numbers.
 #[derive(Clone)]
-pub struct PageRange {
-	pub since: Option<u32>,
-	pub until: Option<u32>,
-}
+pub struct PageRange(Option<BTreeSet<u32>>);
 
 impl PageRange {
-	pub fn contains(&self, n: u32) -> bool {
-		self.since.map_or(true, |s| n >= s) && self.until.map_or(true, |u| n <= u)
+	pub fn all() -> Self {
+		Self(None)
 	}
 
-	pub fn all() -> Self {
-		Self { since: None, until: None }
+	pub fn is_all(&self) -> bool {
+		self.0.is_none()
+	}
+
+	pub fn contains(&self, n: u32) -> bool {
+		match &self.0 {
+			None => true,
+			Some(set) => set.contains(&n),
+		}
+	}
+
+	pub fn from_sorted(nums: &[u32]) -> Self {
+		Self(Some(nums.iter().copied().collect()))
 	}
 }
 
+/// Parse a comma-separated list of ranges/numbers.
+/// Each element can be: a single number (`5`), or a range (`1..50`, `1..=50`, `5..`, `..=20`).
 pub fn parse_range(s: &str) -> Result<PageRange> {
-	if let Ok(n) = s.parse::<u32>() {
-		return Ok(PageRange { since: Some(n), until: Some(n) });
-	}
-	let re = Regex::new(r"^(\d+)?\.\.(=?)(\d+)?$").unwrap();
-	let caps = re.captures(s).ok_or_else(|| eyre!("invalid range '{s}', expected e.g. 517, 1..50, 1..=50, 5.., ..=20"))?;
-	let since = caps.get(1).map(|m| m.as_str().parse::<u32>()).transpose()?;
-	let inclusive = &caps[2] == "=";
-	let end_raw = caps.get(3).map(|m| m.as_str().parse::<u32>()).transpose()?;
-	let until = match (inclusive, end_raw) {
-		(true, Some(n)) => Some(n),
-		(false, Some(0)) => return Err(eyre!("empty range: {s}")),
-		(false, Some(n)) => Some(n - 1),
-		(_, None) => None,
-	};
-	if let (Some(s), Some(u)) = (since, until) {
-		if u < s {
-			return Err(eyre!("empty range: {s}"));
+	let range_re = Regex::new(r"^(\d+)?\.\.(=?)(\d+)?$").unwrap();
+	let mut set = BTreeSet::new();
+
+	for part in s.split(',') {
+		let part = part.trim();
+		if part.is_empty() {
+			continue;
+		}
+		if let Ok(n) = part.parse::<u32>() {
+			set.insert(n);
+			continue;
+		}
+		let caps = range_re
+			.captures(part)
+			.ok_or_else(|| eyre!("invalid range '{part}', expected e.g. 517, 1..50, 1..=50, 5.., ..=20, 1,2,4"))?;
+		let since = caps.get(1).map(|m| m.as_str().parse::<u32>()).transpose()?;
+		let inclusive = &caps[2] == "=";
+		let end_raw = caps.get(3).map(|m| m.as_str().parse::<u32>()).transpose()?;
+		let until = match (inclusive, end_raw) {
+			(true, Some(n)) => Some(n),
+			(false, Some(0)) => return Err(eyre!("empty range: {part}")),
+			(false, Some(n)) => Some(n - 1),
+			(_, None) => return Err(eyre!("open-ended ranges not supported in lists: {part}")),
+		};
+		let since = since.ok_or_else(|| eyre!("open-ended ranges not supported in lists: {part}"))?;
+		let until = until.unwrap(); // guaranteed Some by above
+		if until < since {
+			return Err(eyre!("empty range: {part}"));
+		}
+		for n in since..=until {
+			set.insert(n);
 		}
 	}
-	Ok(PageRange { since, until })
+	if set.is_empty() {
+		return Err(eyre!("empty range: '{s}'"));
+	}
+	Ok(PageRange(Some(set)))
 }
 
 impl fmt::Display for PageRange {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match (self.since, self.until) {
-			(Some(s), Some(u)) => write!(f, "_{s}..={u}"),
-			(Some(s), None) => write!(f, "_{s}.."),
-			(None, Some(u)) => write!(f, "_..={u}"),
-			(None, None) => Ok(()),
+		let set = match &self.0 {
+			None => return Ok(()),
+			Some(s) => s,
+		};
+		if set.is_empty() {
+			return Ok(());
+		}
+		let min = *set.iter().next().unwrap();
+		let max = *set.iter().next_back().unwrap();
+		// Check if contiguous
+		if (max - min + 1) as usize == set.len() {
+			if min == max { write!(f, "_{min}") } else { write!(f, "_{min}..={max}") }
+		} else {
+			write!(f, "_[{min},{max}]")
 		}
 	}
 }
@@ -111,6 +149,19 @@ impl fmt::Display for PageRange {
 pub fn book_root(base: &Path, name: &str) -> &'static PathBuf {
 	static ROOT: OnceLock<PathBuf> = OnceLock::new();
 	ROOT.get_or_init(|| base.join(name))
+}
+
+const LANGUAGE_FILE: &str = ".language";
+
+pub fn persist_language(root: &Path, language: &str) -> Result<()> {
+	fs::write(root.join(LANGUAGE_FILE), language)?;
+	Ok(())
+}
+
+pub fn load_language(root: &Path) -> Option<String> {
+	let s = fs::read_to_string(root.join(LANGUAGE_FILE)).ok()?;
+	let s = s.trim().to_string();
+	if s.is_empty() { None } else { Some(s) }
 }
 
 pub fn collect_numbered(dir: &Path, prefix: &str, suffix: &str) -> Result<Vec<(u32, PathBuf)>> {

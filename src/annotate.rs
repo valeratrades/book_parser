@@ -3,7 +3,7 @@ use std::{fs, path::Path, process::Stdio};
 use color_eyre::eyre::{Result, eyre};
 use tokio::process::Command;
 
-use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, shell_escape};
+use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, shell_escape};
 
 async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>) -> u32 {
 	let results = futures::future::join_all(futs).await;
@@ -27,6 +27,8 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 		return Err(eyre!("source dir not found at '{}' — run `apply translate` first", source_dir.display()));
 	}
 
+	persist_language(root, language)?;
+
 	let range = match range {
 		Some(s) => parse_range(s)?,
 		None => PageRange::all(),
@@ -35,7 +37,7 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 	fs::create_dir_all(&fail_dir)?;
 
 	let all = collect_numbered(&source_dir, "section_", ".md")?;
-	let explicit_range = range.since.is_some() || range.until.is_some();
+	let explicit_range = !range.is_all();
 	let sections: Vec<_> = all.into_iter().filter(|(n, _)| range.contains(*n)).collect();
 
 	let mut total_failed = 0u32;

@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use color_eyre::eyre::{Result, eyre};
 use v_utils::io::{ConfirmResult, confirmation};
 
-use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range};
+use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language};
 
 #[cfg(test)]
 mod tests;
@@ -107,6 +107,7 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 	}
 
 	preflight_ollama(yes).await?;
+	persist_language(root, language)?;
 
 	let range = match range {
 		Some(s) => parse_range(s)?,
@@ -116,7 +117,7 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 	fs::create_dir_all(&fail_dir)?;
 
 	let all = collect_numbered(&sections_dir, "section_", ".md")?;
-	let explicit_range = range.since.is_some() || range.until.is_some();
+	let explicit_range = !range.is_all();
 	let sections: Vec<_> = all.into_iter().filter(|(n, _)| range.contains(*n)).collect();
 
 	// Cap output tokens so a degenerate repetition loop fails fast instead of burning 10+ minutes.

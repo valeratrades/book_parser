@@ -7,10 +7,11 @@ use std::{
 use color_eyre::eyre::{Result, eyre};
 use zip::{ZipWriter, write::FileOptions};
 
-use crate::section::{PageRange, Stage, book_root, collect_numbered, escape_xml, md_title};
+use crate::section::{PageRange, Stage, book_root, collect_numbered, escape_xml, load_language, md_title};
 
-pub fn run(name: &str, language: &str, format: &str, force: bool, dir: &Path, out_dir: &Path) -> Result<()> {
+pub fn run(name: &str, format: &str, force: bool, dir: &Path, out_dir: &Path) -> Result<()> {
 	let root = book_root(dir, name);
+	let language = load_language(root);
 
 	let (stage, sections) = Stage::resolve_latest(root)?;
 
@@ -20,14 +21,8 @@ pub fn run(name: &str, language: &str, format: &str, force: bool, dir: &Path, ou
 
 	let parsed = collect_numbered(&root.join(Stage::Raw.dir_name()), "section_", ".md")?;
 	let range = if sections.len() < parsed.len() {
-		let first_t = sections.first().unwrap().0;
-		let last_t = sections.last().unwrap().0;
-		let first_p = parsed.first().map(|p| p.0).unwrap_or(first_t);
-		let last_p = parsed.last().map(|p| p.0).unwrap_or(last_t);
-		PageRange {
-			since: (first_t != first_p).then_some(first_t),
-			until: (last_t != last_p).then_some(last_t),
-		}
+		let nums: Vec<u32> = sections.iter().map(|(n, _)| *n).collect();
+		PageRange::from_sorted(&nums)
 	} else {
 		PageRange::all()
 	};
@@ -37,14 +32,15 @@ pub fn run(name: &str, language: &str, format: &str, force: bool, dir: &Path, ou
 		"md" | "markdown" => "md",
 		_ => return Err(eyre!("unsupported format '{format}', expected epub or md")),
 	};
-	let out_path = out_dir.join(format!("{name}{range}.{language}.{out_ext}"));
+	let lang_suffix = language.as_ref().map(|l| format!(".{l}")).unwrap_or_default();
+	let out_path = out_dir.join(format!("{name}{range}{lang_suffix}.{out_ext}"));
 
 	if out_path.exists() && !force {
 		return Err(eyre!("output file '{}' already exists (use --force to overwrite)", out_path.display()));
 	}
 
 	match out_ext {
-		"epub" => compile_epub(&sections, language, &out_path)?,
+		"epub" => compile_epub(&sections, language.as_deref(), &out_path)?,
 		"md" => compile_markdown(&sections, &out_path)?,
 		_ => unreachable!(),
 	}
@@ -53,7 +49,7 @@ pub fn run(name: &str, language: &str, format: &str, force: bool, dir: &Path, ou
 	Ok(())
 }
 
-fn compile_epub(sections: &[(u32, PathBuf)], language: &str, out: &Path) -> Result<()> {
+fn compile_epub(sections: &[(u32, PathBuf)], language: Option<&str>, out: &Path) -> Result<()> {
 	let file = fs::File::create(out)?;
 	let mut zip = ZipWriter::new(file);
 
@@ -80,13 +76,14 @@ fn compile_epub(sections: &[(u32, PathBuf)], language: &str, out: &Path) -> Resu
 		zip.write_all(xhtml.as_bytes())?;
 	}
 
+	let lang = language.unwrap_or("und");
 	let mut opf = format!(
 		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
 		 <package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"uid\">\n\
 		 <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n\
 		 <dc:identifier id=\"uid\">process-book-output</dc:identifier>\n\
 		 <dc:title>Translated Book</dc:title>\n\
-		 <dc:language>{language}</dc:language>\n\
+		 <dc:language>{lang}</dc:language>\n\
 		 <meta property=\"dcterms:modified\">2025-01-01T00:00:00Z</meta>\n\
 		 </metadata>\n\
 		 <manifest>\n\
