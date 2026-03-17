@@ -38,13 +38,6 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 	let explicit_range = range.since.is_some() || range.until.is_some();
 	let sections: Vec<_> = all.into_iter().filter(|(n, _)| range.contains(*n)).collect();
 
-	println!(
-		"annotating {} sections from {}{}",
-		sections.len(),
-		Stage::Translated,
-		if explicit_range { format!(" (range: {range})") } else { String::new() }
-	);
-
 	let mut total_failed = 0u32;
 
 	// main pass
@@ -58,13 +51,13 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 			}
 			to_annotate.push(*num);
 		}
-		if skipped > 0 {
-			if explicit_range {
-				eprintln!("warning: skipped {skipped} already-annotated sections (use --force to overwrite)");
-			} else {
-				eprintln!("skipping {skipped} already-annotated sections");
-			}
-		}
+		println!(
+			"found {} translated sections{}, {} already annotated, annotating {}",
+			sections.len(),
+			if explicit_range { format!(" (range: {range})") } else { String::new() },
+			skipped,
+			to_annotate.len(),
+		);
 		for chunk in to_annotate.chunks(max_jobs) {
 			let futs: Vec<_> = chunk.iter().map(|&num| annotate_section(num, language, wlimit, &source_dir, &annotated_dir, &fail_dir)).collect();
 			total_failed += run_batch(futs).await;

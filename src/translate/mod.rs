@@ -116,17 +116,8 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 	fs::create_dir_all(&fail_dir)?;
 
 	let all = collect_numbered(&sections_dir, "section_", ".md")?;
+	let explicit_range = range.since.is_some() || range.until.is_some();
 	let sections: Vec<_> = all.into_iter().filter(|(n, _)| range.contains(*n)).collect();
-
-	println!(
-		"translating {} sections{}",
-		sections.len(),
-		if range.since.is_some() || range.until.is_some() {
-			format!(" (range: {range})")
-		} else {
-			String::new()
-		}
-	);
 
 	let client = ask_llm::Client::default().model(ask_llm::Model::Translate);
 	let mut total_failed = 0u32;
@@ -142,9 +133,13 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 			}
 			to_translate.push((*num, path.clone()));
 		}
-		if skipped > 0 {
-			eprintln!("warning: skipped {skipped} already-translated sections (use --force to overwrite)");
-		}
+		println!(
+			"found {} sections{}, {} already translated, translating {}",
+			sections.len(),
+			if explicit_range { format!(" (range: {range})") } else { String::new() },
+			skipped,
+			to_translate.len(),
+		);
 		for chunk in to_translate.chunks(max_jobs) {
 			let futs: Vec<_> = chunk
 				.iter()
