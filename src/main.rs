@@ -56,6 +56,9 @@ enum Cmd {
 	Compile {
 		/// Book name (directory under --dir); cached across runs
 		name: Option<String>,
+		/// Target language (used in filename and epub metadata)
+		#[arg(short, long)]
+		language: String,
 		/// Output format
 		#[arg(short, long, default_value = "epub")]
 		format: OutputFormat,
@@ -181,9 +184,9 @@ async fn main() -> Result<()> {
 				}
 			}
 		}
-		Cmd::Compile { name, format, out } => {
+		Cmd::Compile { name, language, format, out } => {
 			let name = resolve_name(name, cli.yes)?;
-			compile::run(&name, &format.to_string(), cli.force, &cli.dir, &out)?;
+			compile::run(&name, &language, &format.to_string(), cli.force, &cli.dir, &out)?;
 		}
 	}
 
