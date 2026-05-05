@@ -1,5 +1,5 @@
 use std::{
-	collections::VecDeque,
+	collections::{BTreeMap, VecDeque},
 	fs,
 	path::Path,
 	sync::atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -18,7 +18,7 @@ const CF_FALLBACK_PARALLEL: usize = 4;
 /// ...and the inter-chunk wait is clamped up to (at least) this many seconds.
 const CF_FALLBACK_TIMEOUT_SECS: u64 = 1;
 
-pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force: bool, dir: &Path, name_override: Option<&str>) -> Result<()> {
+pub async fn run(url: &str, css_text: &[String], css_title: Option<&str>, parallel: usize, timeout: u64, force: bool, dir: &Path, name_override: Option<&str>) -> Result<()> {
 	let (url_template, start, end) = parse_load_url(url)?;
 	let name = name_override.map(str::to_owned).unwrap_or_else(|| book_name_from_url(url));
 	fs::write(v_utils::xdg_cache_file!("last_book_name"), &name)?;
@@ -63,6 +63,7 @@ pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force
 
 	let mut queue: VecDeque<u32> = pages_to_load.into();
 	let mut chunk_idx = 0u32;
+	let mut raw_titles: BTreeMap<u32, String> = BTreeMap::new();
 	while !queue.is_empty() {
 		let par = client.effective_parallel();
 		let to_secs = client.effective_timeout_secs();
@@ -73,13 +74,16 @@ pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force
 
 		let take = par.min(queue.len());
 		let chunk: Vec<u32> = queue.drain(..take).collect();
-		let futs = chunk.iter().map(|&p| load_page(&client, &url_template, p, css, &sections_dir));
+		let futs = chunk.iter().map(|&p| load_page(&client, &url_template, p, css_text, css_title, &sections_dir));
 		let results = join_all(futs).await;
 
 		let mut requeue = Vec::new();
 		for (page, res) in chunk.iter().zip(results) {
 			match res {
-				Ok(PageOutcome::Saved) => {}
+				Ok(PageOutcome::Saved { raw_title }) =>
+					if let Some(t) = raw_title {
+						raw_titles.insert(*page, t);
+					},
 				Ok(PageOutcome::Throttled) => requeue.push(*page),
 				Err(e) => {
 					enforce_contiguous(&sections_dir, start, end);
@@ -100,10 +104,98 @@ pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force
 		bail!("stopped at page {gap} (gap in sequence)");
 	}
 
+	if css_title.is_some() {
+		let chapters = mark_chapters(&sections_dir, start, end, &raw_titles)?;
+		println!("marked {chapters} chapter starts (Levenshtein ratio > 0.25)");
+	}
+
 	println!("loaded all {} pages ({start}..={end})", end - start + 1);
 	println!("book name: {name}");
 	Ok(())
 }
+
+/// Walk sections in order. For each page whose raw title was just scraped, decide whether
+/// it begins a new chapter (Levenshtein ratio against the last kept title > 25%, or none yet).
+/// Chapter starts get a `# title` heading prepended to the .md. Pages absent from `raw_titles`
+/// (already processed in a prior run) feed `last_chapter_title` from their existing top-level
+/// `# X` heading, if any.
+fn mark_chapters(dir: &Path, start: u32, end: u32, raw_titles: &BTreeMap<u32, String>) -> Result<u32> {
+	let mut last_chapter_title: Option<String> = None;
+	let mut starts = 0u32;
+	for page in start..=end {
+		let md_path = dir.join(format!("section_{page}.md"));
+		let Some(raw) = raw_titles.get(&page) else {
+			let md = fs::read_to_string(&md_path)?;
+			if let Some(line) = md.lines().next()
+				&& let Some(t) = line.strip_prefix("# ")
+			{
+				last_chapter_title = Some(t.trim().to_string());
+			}
+			continue;
+		};
+		assert!(!raw.is_empty(), "scrape_page rejects empty titles");
+		let new_chapter = match &last_chapter_title {
+			None => true,
+			Some(prev) => title_diff_ratio(prev, raw) > 0.25,
+		};
+		if new_chapter {
+			let body = fs::read_to_string(&md_path)?;
+			let mut out = String::with_capacity(raw.len() + body.len() + 4);
+			out.push_str("# ");
+			out.push_str(raw);
+			out.push('\n');
+			out.push_str(&body);
+			fs::write(&md_path, out)?;
+			last_chapter_title = Some(raw.clone());
+			starts += 1;
+		}
+	}
+	Ok(starts)
+}
+
+/// Levenshtein distance / max(len_a, len_b), in chars. Returns 0.0 if both empty.
+fn title_diff_ratio(a: &str, b: &str) -> f64 {
+	let a: Vec<char> = a.chars().collect();
+	let b: Vec<char> = b.chars().collect();
+	let (m, n) = (a.len(), b.len());
+	if m == 0 && n == 0 {
+		return 0.0;
+	}
+	let mut prev: Vec<usize> = (0..=n).collect();
+	let mut curr = vec![0usize; n + 1];
+	for i in 1..=m {
+		curr[0] = i;
+		for j in 1..=n {
+			let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+			curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+		}
+		std::mem::swap(&mut prev, &mut curr);
+	}
+	prev[n] as f64 / m.max(n) as f64
+}
+
+#[cfg(test)]
+mod tests {
+	use super::title_diff_ratio;
+
+	#[test]
+	fn identical_titles_are_continuation() {
+		let r = title_diff_ratio("Chapter 232 - 232: Before the Storm", "Chapter 232 - 232: Before the Storm");
+		assert!(r <= 0.25, "expected continuation, got ratio {r}");
+	}
+
+	#[test]
+	fn different_chapters_cross_threshold() {
+		let r = title_diff_ratio("Chapter 232 - 232: Before the Storm", "Chapter 233 - 233: After the Battle");
+		assert!(r > 0.25, "expected new chapter, got ratio {r}");
+	}
+
+	#[test]
+	fn empty_inputs() {
+		assert_eq!(title_diff_ratio("", ""), 0.0);
+	}
+}
+
 struct BookClient {
 	http: Client,
 	user_parallel: usize,
@@ -147,13 +239,16 @@ impl BookClient {
 }
 
 enum ScrapeOutcome {
-	Blocks(Vec<String>),
+	Blocks {
+		paragraphs: Vec<String>,
+		title: Option<String>,
+	},
 	/// 503 from Cloudflare — caller should re-queue this page.
 	Throttled,
 }
 
 enum PageOutcome {
-	Saved,
+	Saved { raw_title: Option<String> },
 	Throttled,
 }
 
@@ -190,12 +285,12 @@ fn book_name_from_url(url: &str) -> String {
 	parts.join("_")
 }
 
-async fn load_page(client: &BookClient, url_template: &str, page: u32, css_selectors: &[String], outdir: &Path) -> Result<PageOutcome> {
+async fn load_page(client: &BookClient, url_template: &str, page: u32, css_text: &[String], css_title: Option<&str>, outdir: &Path) -> Result<PageOutcome> {
 	let url = url_template.replace("{}", &page.to_string());
 	let out_path = outdir.join(format!("section_{page}.md"));
 
-	let content_blocks = match scrape_page(client, &url, css_selectors).await? {
-		ScrapeOutcome::Blocks(b) => b,
+	let (content_blocks, raw_title) = match scrape_page(client, &url, css_text, css_title).await? {
+		ScrapeOutcome::Blocks { paragraphs, title } => (paragraphs, title),
 		ScrapeOutcome::Throttled => {
 			tracing::debug!("page {page} throttled, will retry");
 			return Ok(PageOutcome::Throttled);
@@ -208,10 +303,10 @@ async fn load_page(client: &BookClient, url_template: &str, page: u32, css_selec
 	fs::write(out_path, md)?;
 	println!("  page {page} ok");
 
-	Ok(PageOutcome::Saved)
+	Ok(PageOutcome::Saved { raw_title })
 }
 
-async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[String]) -> Result<ScrapeOutcome> {
+async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[String], css_title: Option<&str>) -> Result<ScrapeOutcome> {
 	let response = client.http.get(url).send().await?;
 
 	if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
@@ -238,7 +333,7 @@ async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[Str
 		css_selectors.push(selector);
 	}
 
-	assert!(css_selectors.len() > 0, "No CSS selectors provided");
+	assert!(!css_selectors.is_empty(), "clap enforces required = true");
 	let container = {
 		let mut i = 0;
 		loop {
@@ -294,5 +389,18 @@ async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[Str
 		bail!("No content blocks (paragraphs, headings, or subtitles) found in the specified container");
 	}
 
-	Ok(ScrapeOutcome::Blocks(content_blocks))
+	let title = match css_title {
+		Some(sel) => {
+			let parsed = Selector::parse(sel).map_err(|e| eyre!("Invalid title selector: {sel}. Error: {e}"))?;
+			let elem = document.select(&parsed).next().ok_or_else(|| eyre!("title selector matched no element: {sel}"))?;
+			let t = elem.text().collect::<Vec<_>>().join("").trim().to_string();
+			if t.is_empty() {
+				bail!("title selector matched empty text: {sel}");
+			}
+			Some(decode_entities(&t))
+		}
+		None => None,
+	};
+
+	Ok(ScrapeOutcome::Blocks { paragraphs: content_blocks, title })
 }

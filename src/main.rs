@@ -90,21 +90,30 @@ enum FromCmd {
 	/// Examples:
 	///   # path-segment range, inclusive (chapter/1/, chapter/2/, ..., chapter/2980/)
 	///   book_parser from load 'https://lightnovelworld.org/novel/shadow-slave/chapter/1..=2980/' \
-	///     --css '#chapter-container'
+	///     --css-text '#chapter-container'
 	///
 	///   # exclusive: 1..100 fetches pages 1..=99
-	///   book_parser from load 'https://example.com/b/123/read#t1..100' --css '.content'
+	///   book_parser from load 'https://example.com/b/123/read#t1..100' --css-text '.content'
 	///
 	///   # multiple selector fallbacks (first matching wins per page)
 	///   book_parser from load 'https://site.com/novel/foo/ch-1..=500' \
-	///     --css '#chapter-content' --css 'article.post' --css '.entry-content'
+	///     --css-text '#chapter-content' --css-text 'article.post' --css-text '.entry-content'
+	///
+	///   # also extract a chapter title; new-chapter detection by Levenshtein ratio
+	///   book_parser from load 'https://site.com/novel/foo/chapter/1..=500/' \
+	///     --css-text '#chapter-container' --css-title 'h1.chapter-title'
 	Load {
 		/// URL whose trailing `N..M` or `N..=M` is replaced by each page number.
 		/// E.g. `https://example.com/b/123/chapter/1..=50/` expands to `.../chapter/1/`..`.../chapter/50/`.
 		url: String,
 		/// CSS selectors for content extraction (can be repeated)
-		#[arg(short, long)]
-		css: Vec<String>,
+		#[arg(long, required = true)]
+		css_text: Vec<String>,
+		/// Optional CSS selector for the chapter-title element. If a page's title differs from
+		/// the previous kept title by more than 25% (Levenshtein ratio), that page starts a new
+		/// chapter and gets a `# title` heading.
+		#[arg(long)]
+		css_title: Option<String>,
 		/// Parallel page downloads per chunk
 		#[arg(long, default_value_t = 16)]
 		parallel: usize,
@@ -166,8 +175,14 @@ async fn main() -> Result<()> {
 			FromCmd::Parse { file, chapter_pattern } => {
 				parse::run(&file, chapter_pattern.as_deref(), &cli.dir, cli.name.as_deref())?;
 			}
-			FromCmd::Load { url, css, parallel, timeout } => {
-				load::run(&url, &css, parallel, timeout, cli.force, &cli.dir, cli.name.as_deref()).await?;
+			FromCmd::Load {
+				url,
+				css_text,
+				css_title,
+				parallel,
+				timeout,
+			} => {
+				load::run(&url, &css_text, css_title.as_deref(), parallel, timeout, cli.force, &cli.dir, cli.name.as_deref()).await?;
 			}
 		},
 		Cmd::Apply { stage } => {
