@@ -11,7 +11,7 @@ use regex::Regex;
 
 use crate::section::{book_root, paragraphs_to_md};
 
-pub fn run(file: &Path, chapter_pattern: Option<&str>, dir: &Path) -> Result<()> {
+pub fn run(file: &Path, chapter_pattern: Option<&str>, dir: &Path, name_override: Option<&str>) -> Result<()> {
 	if !file.exists() {
 		bail!("file '{}' does not exist", file.display());
 	}
@@ -20,10 +20,13 @@ pub fn run(file: &Path, chapter_pattern: Option<&str>, dir: &Path) -> Result<()>
 		"txt" | "fb2" | "epub" => {}
 		_ => bail!("unsupported extension '.{ext}', expected .txt, .fb2, or .epub"),
 	}
-	let stem = file.file_stem().ok_or_else(|| eyre!("input file has no stem"))?.to_string_lossy().to_string();
-	fs::write(v_utils::xdg_cache_file!("last_book_name"), &stem)?;
+	let name = match name_override {
+		Some(n) => n.to_owned(),
+		None => file.file_stem().ok_or_else(|| eyre!("input file has no stem"))?.to_string_lossy().to_string(),
+	};
+	fs::write(v_utils::xdg_cache_file!("last_book_name"), &name)?;
 
-	let root = book_root(dir, &stem);
+	let root = book_root(dir, &name);
 	let sections_dir = root.join("sections");
 	fs::create_dir_all(&sections_dir)?;
 

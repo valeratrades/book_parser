@@ -1,15 +1,26 @@
-use std::{fs, path::Path};
+use std::{
+	collections::VecDeque,
+	fs,
+	path::Path,
+	sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+};
 
 use color_eyre::eyre::{Result, bail, eyre};
+use futures::future::join_all;
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
 
 use crate::section::{book_root, decode_entities, enforce_contiguous, paragraphs_to_md};
 
-pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force: bool, dir: &Path) -> Result<()> {
+/// When a Cloudflare 503 is detected, parallelism is clamped down to this.
+const CF_FALLBACK_PARALLEL: usize = 4;
+/// ...and the inter-chunk wait is clamped up to (at least) this many seconds.
+const CF_FALLBACK_TIMEOUT_SECS: u64 = 1;
+
+pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force: bool, dir: &Path, name_override: Option<&str>) -> Result<()> {
 	let (url_template, start, end) = parse_load_url(url)?;
-	let name = book_name_from_url(url);
+	let name = name_override.map(str::to_owned).unwrap_or_else(|| book_name_from_url(url));
 	fs::write(v_utils::xdg_cache_file!("last_book_name"), &name)?;
 	let root = book_root(dir, &name);
 	let sections_dir = root.join("sections");
@@ -42,24 +53,45 @@ pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force
 		return Ok(());
 	}
 
-	let n_chunks = pages_to_load.len().div_ceil(parallel);
-	println!("loading {} pages in {n_chunks} chunks of {parallel} -> {}", pages_to_load.len(), sections_dir.display());
+	println!(
+		"loading {} pages with parallel<= {parallel}, timeout>= {timeout}s -> {}",
+		pages_to_load.len(),
+		sections_dir.display()
+	);
 
-	let client = Client::builder()
-		.user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-		.build()?;
+	let client = BookClient::try_new(parallel, timeout)?;
 
-	for (chunk_idx, chunk) in pages_to_load.chunks(parallel).enumerate() {
-		if chunk_idx > 0 && timeout > 0 {
-			println!("  waiting {timeout}s between chunks...");
-			tokio::time::sleep(std::time::Duration::from_secs(timeout)).await;
+	let mut queue: VecDeque<u32> = pages_to_load.into();
+	let mut chunk_idx = 0u32;
+	while !queue.is_empty() {
+		let par = client.effective_parallel();
+		let to_secs = client.effective_timeout_secs();
+		if chunk_idx > 0 && to_secs > 0 {
+			println!("  waiting {to_secs}s between chunks...");
+			tokio::time::sleep(std::time::Duration::from_secs(to_secs)).await;
 		}
 
-		let futs: Vec<_> = chunk.iter().map(|&page| load_page(&client, &url_template, page, css, &sections_dir)).collect();
-		if let Err(e) = futures::future::try_join_all(futs).await {
-			enforce_contiguous(&sections_dir, start, end);
-			return Err(e);
+		let take = par.min(queue.len());
+		let chunk: Vec<u32> = queue.drain(..take).collect();
+		let futs = chunk.iter().map(|&p| load_page(&client, &url_template, p, css, &sections_dir));
+		let results = join_all(futs).await;
+
+		let mut requeue = Vec::new();
+		for (page, res) in chunk.iter().zip(results) {
+			match res {
+				Ok(PageOutcome::Saved) => {}
+				Ok(PageOutcome::Throttled) => requeue.push(*page),
+				Err(e) => {
+					enforce_contiguous(&sections_dir, start, end);
+					return Err(e);
+				}
+			}
 		}
+		// retry throttled pages first, preserving their original order
+		for p in requeue.into_iter().rev() {
+			queue.push_front(p);
+		}
+		chunk_idx += 1;
 	}
 
 	if let Some(gap) = enforce_contiguous(&sections_dir, start, end) {
@@ -71,6 +103,58 @@ pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force
 	println!("loaded all {} pages ({start}..={end})", end - start + 1);
 	println!("book name: {name}");
 	Ok(())
+}
+struct BookClient {
+	http: Client,
+	user_parallel: usize,
+	user_timeout_secs: u64,
+	/// Clamps parallel DOWN. `usize::MAX` = unset.
+	force_max_parallel: AtomicUsize,
+	/// Clamps inter-chunk timeout UP. `0` = unset.
+	force_min_timeout_secs: AtomicU64,
+}
+
+impl BookClient {
+	fn try_new(parallel: usize, timeout_secs: u64) -> Result<Self> {
+		let http = Client::builder()
+			.user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+			.build()?;
+		Ok(Self {
+			http,
+			user_parallel: parallel,
+			user_timeout_secs: timeout_secs,
+			force_max_parallel: AtomicUsize::new(usize::MAX),
+			force_min_timeout_secs: AtomicU64::new(0),
+		})
+	}
+
+	fn effective_parallel(&self) -> usize {
+		self.user_parallel.min(self.force_max_parallel.load(Ordering::Relaxed)).max(1)
+	}
+
+	fn effective_timeout_secs(&self) -> u64 {
+		self.user_timeout_secs.max(self.force_min_timeout_secs.load(Ordering::Relaxed))
+	}
+
+	/// Called when we observe a 503 with `server: cloudflare`. Idempotent across concurrent calls.
+	fn trip_cloudflare_throttle(&self) {
+		let prev = self.force_max_parallel.swap(CF_FALLBACK_PARALLEL, Ordering::Relaxed);
+		if prev > CF_FALLBACK_PARALLEL {
+			self.force_min_timeout_secs.fetch_max(CF_FALLBACK_TIMEOUT_SECS, Ordering::Relaxed);
+			tracing::warn!("Cloudflare 503 detected; clamping parallel <= {CF_FALLBACK_PARALLEL}, timeout >= {CF_FALLBACK_TIMEOUT_SECS}s and re-queuing throttled pages");
+		}
+	}
+}
+
+enum ScrapeOutcome {
+	Blocks(Vec<String>),
+	/// 503 from Cloudflare — caller should re-queue this page.
+	Throttled,
+}
+
+enum PageOutcome {
+	Saved,
+	Throttled,
 }
 
 fn parse_load_url(url: &str) -> Result<(String, u32, u32)> {
@@ -106,11 +190,17 @@ fn book_name_from_url(url: &str) -> String {
 	parts.join("_")
 }
 
-async fn load_page(client: &Client, url_template: &str, page: u32, css_selectors: &[String], outdir: &Path) -> Result<()> {
+async fn load_page(client: &BookClient, url_template: &str, page: u32, css_selectors: &[String], outdir: &Path) -> Result<PageOutcome> {
 	let url = url_template.replace("{}", &page.to_string());
 	let out_path = outdir.join(format!("section_{page}.md"));
 
-	let content_blocks = scrape_page(client, &url, css_selectors).await?;
+	let content_blocks = match scrape_page(client, &url, css_selectors).await? {
+		ScrapeOutcome::Blocks(b) => b,
+		ScrapeOutcome::Throttled => {
+			tracing::debug!("page {page} throttled, will retry");
+			return Ok(PageOutcome::Throttled);
+		}
+	};
 	let text = content_blocks.join("\n\n");
 	let decoded = decode_entities(&text);
 	let lines: Vec<&str> = decoded.lines().collect();
@@ -118,11 +208,22 @@ async fn load_page(client: &Client, url_template: &str, page: u32, css_selectors
 	fs::write(out_path, md)?;
 	println!("  page {page} ok");
 
-	Ok(())
+	Ok(PageOutcome::Saved)
 }
 
-async fn scrape_page(client: &Client, url: &str, css_selector_strings: &[String]) -> Result<Vec<String>> {
-	let response = client.get(url).send().await?;
+async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[String]) -> Result<ScrapeOutcome> {
+	let response = client.http.get(url).send().await?;
+
+	if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
+		&& response
+			.headers()
+			.get(reqwest::header::SERVER)
+			.and_then(|v| v.to_str().ok())
+			.is_some_and(|s| s.eq_ignore_ascii_case("cloudflare"))
+	{
+		client.trip_cloudflare_throttle();
+		return Ok(ScrapeOutcome::Throttled);
+	}
 
 	if !response.status().is_success() {
 		bail!("Failed to retrieve page. Status code: {}", response.status());
@@ -193,5 +294,5 @@ async fn scrape_page(client: &Client, url: &str, css_selector_strings: &[String]
 		bail!("No content blocks (paragraphs, headings, or subtitles) found in the specified container");
 	}
 
-	Ok(content_blocks)
+	Ok(ScrapeOutcome::Blocks(content_blocks))
 }

@@ -79,28 +79,18 @@ pub async fn run(input: &Path, output: &Path, model: Model) -> Result<()> {
 /// or an explicit file path which must end in `.wav`.
 fn resolve_output(input: &Path, output: &Path) -> Result<PathBuf> {
 	if output.is_dir() {
-		let stem = input
-			.file_stem()
-			.ok_or_else(|| eyre!("input path has no file stem: {}", input.display()))?;
+		let stem = input.file_stem().ok_or_else(|| eyre!("input path has no file stem: {}", input.display()))?;
 		return Ok(output.join(stem).with_extension(OUT_EXT));
 	}
 	match output.extension().and_then(|e| e.to_str()) {
 		Some(ext) if ext.eq_ignore_ascii_case(OUT_EXT) => Ok(output.to_path_buf()),
 		Some(ext) => bail!("output extension must be .{OUT_EXT}, got .{ext}"),
-		None => bail!(
-			"output '{}' is neither an existing directory nor a file path with .{OUT_EXT} extension",
-			output.display()
-		),
+		None => bail!("output '{}' is neither an existing directory nor a file path with .{OUT_EXT} extension", output.display()),
 	}
 }
 
 async fn preflight_uv() -> Result<()> {
-	let status = Command::new("uv")
-		.arg("--version")
-		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.status()
-		.await;
+	let status = Command::new("uv").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().await;
 	match status {
 		Ok(s) if s.success() => Ok(()),
 		_ => bail!("`uv` is required for the tts command (https://docs.astral.sh/uv/). Install it and re-run."),

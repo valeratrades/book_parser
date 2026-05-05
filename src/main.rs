@@ -28,6 +28,11 @@ struct Cli {
 	/// Assume yes for all confirmation prompts
 	#[arg(short, long)]
 	yes: bool,
+	/// Book name (directory under --dir); cached across runs.
+	/// On `from`: overrides the auto-derived name (URL-derived for `load`, file-stem-derived for `parse`).
+	/// On `apply`/`compile`: selects which book to operate on (falls back to the last cached name).
+	#[arg(short, long, global = true)]
+	name: Option<String>,
 	#[command(subcommand)]
 	cmd: Cmd,
 }
@@ -41,15 +46,11 @@ enum Cmd {
 	},
 	/// Apply a processing stage to sections
 	Apply {
-		/// Book name (directory under --dir); cached across runs
-		name: Option<String>,
 		#[command(subcommand)]
 		stage: ApplyCmd,
 	},
 	/// Assemble sections into epub/md
 	Compile {
-		/// Book name (directory under --dir); cached across runs
-		name: Option<String>,
 		/// Output format
 		#[arg(short, long, default_value = "epub")]
 		format: OutputFormat,
@@ -68,23 +69,6 @@ enum Cmd {
 	},
 }
 
-/// `--fast` (Kokoro-82M, default) vs `--best` (Chatterbox).
-#[derive(clap::Args)]
-#[group(required = false, multiple = false)]
-struct TtsModelChoice {
-	/// Kokoro-82M: fast, CPU-friendly (default)
-	#[arg(long)]
-	fast: bool,
-	/// Chatterbox: larger, higher quality, wants a GPU
-	#[arg(long)]
-	best: bool,
-}
-
-impl From<TtsModelChoice> for tts::Model {
-	fn from(c: TtsModelChoice) -> Self {
-		if c.best { tts::Model::Best } else { tts::Model::Fast }
-	}
-}
 #[derive(Subcommand)]
 enum FromCmd {
 	/// Split a local book file into sections
@@ -155,6 +139,23 @@ enum ApplyCmd {
 	/// Retry all failed sections (reads settings from .fail files)
 	Retry,
 }
+/// `--fast` (Kokoro-82M, default) vs `--best` (Chatterbox).
+#[derive(clap::Args)]
+#[group(required = false, multiple = false)]
+struct TtsModelChoice {
+	/// Kokoro-82M: fast, CPU-friendly (default)
+	#[arg(long)]
+	fast: bool,
+	/// Chatterbox: larger, higher quality, wants a GPU
+	#[arg(long)]
+	best: bool,
+}
+
+impl From<TtsModelChoice> for tts::Model {
+	fn from(c: TtsModelChoice) -> Self {
+		if c.best { tts::Model::Best } else { tts::Model::Fast }
+	}
+}
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
 	v_utils::clientside!();
@@ -163,14 +164,14 @@ async fn main() -> Result<()> {
 	match cli.cmd {
 		Cmd::From { source } => match source {
 			FromCmd::Parse { file, chapter_pattern } => {
-				parse::run(&file, chapter_pattern.as_deref(), &cli.dir)?;
+				parse::run(&file, chapter_pattern.as_deref(), &cli.dir, cli.name.as_deref())?;
 			}
 			FromCmd::Load { url, css, parallel, timeout } => {
-				load::run(&url, &css, parallel, timeout, cli.force, &cli.dir).await?;
+				load::run(&url, &css, parallel, timeout, cli.force, &cli.dir, cli.name.as_deref()).await?;
 			}
 		},
-		Cmd::Apply { name, stage } => {
-			let name = resolve_name(name, cli.yes)?;
+		Cmd::Apply { stage } => {
+			let name = resolve_name(cli.name, cli.yes)?;
 			match stage {
 				ApplyCmd::Translate { language, range } => {
 					translate::run(&name, &language, range.as_deref(), cli.max_jobs, cli.force, cli.yes, &cli.dir).await?;
@@ -183,8 +184,8 @@ async fn main() -> Result<()> {
 				}
 			}
 		}
-		Cmd::Compile { name, format, out } => {
-			let name = resolve_name(name, cli.yes)?;
+		Cmd::Compile { format, out } => {
+			let name = resolve_name(cli.name, cli.yes)?;
 			compile::run(&name, &format.to_string(), cli.force, &cli.dir, &out)?;
 		}
 		Cmd::Tts { input, output, model } => {
