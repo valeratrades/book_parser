@@ -11,6 +11,7 @@ mod parse;
 mod retry;
 mod section;
 mod translate;
+mod tts;
 
 #[derive(Parser)]
 #[command(author, version, about = "Book processing pipeline")]
@@ -56,6 +57,33 @@ enum Cmd {
 		#[arg(short, long, default_value_os_t = default_out_dir())]
 		out: PathBuf,
 	},
+	/// Synthesize speech from a .txt/.md file (standalone — not part of the book pipeline)
+	Tts {
+		/// Input file (.txt or .md)
+		input: PathBuf,
+		/// Output: either an existing directory (file named after input) or a `.wav` file path
+		output: PathBuf,
+		#[command(flatten)]
+		model: TtsModelChoice,
+	},
+}
+
+/// `--fast` (Kokoro-82M, default) vs `--best` (Chatterbox).
+#[derive(clap::Args)]
+#[group(required = false, multiple = false)]
+struct TtsModelChoice {
+	/// Kokoro-82M: fast, CPU-friendly (default)
+	#[arg(long)]
+	fast: bool,
+	/// Chatterbox: larger, higher quality, wants a GPU
+	#[arg(long)]
+	best: bool,
+}
+
+impl From<TtsModelChoice> for tts::Model {
+	fn from(c: TtsModelChoice) -> Self {
+		if c.best { tts::Model::Best } else { tts::Model::Fast }
+	}
 }
 #[derive(Subcommand)]
 enum FromCmd {
@@ -158,6 +186,9 @@ async fn main() -> Result<()> {
 		Cmd::Compile { name, format, out } => {
 			let name = resolve_name(name, cli.yes)?;
 			compile::run(&name, &format.to_string(), cli.force, &cli.dir, &out)?;
+		}
+		Cmd::Tts { input, output, model } => {
+			tts::run(&input, &output, model.into()).await?;
 		}
 	}
 

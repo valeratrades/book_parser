@@ -79,6 +79,7 @@
               mold
               pkg-config
               rust
+              uv
             ] ++ combined.enabledPackages;
           };
       }
