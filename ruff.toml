@@ -1,0 +1,150 @@
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".env",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".idea",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "infra",
+    "node_modules",
+    "site-packages",
+    "venv",
+    "**/.venv/**",
+    "**/migrations/**",
+]
+fix = true
+indent-width = 2
+line-length = 210
+preview = true
+show-fixes = true
+src = ["src", "test"]
+
+[format]
+docstring-code-format = true
+indent-style = "tab"
+quote-style = "double"
+skip-magic-trailing-comma = false
+
+[lint]
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+fixable = ["ALL"]
+ignore = [
+    "E111",
+    "E114",
+    "E117",
+    "E261",
+    "E262",
+    "E265",
+    "E401",
+    "D100",
+    "D104",
+    "D105",
+    "D202",
+    "D206",
+    "D401",
+    "E262",
+    "E401",
+    "E501",
+    "E703",
+    "E713",
+    "E714",
+    "E722",
+    "E741",
+    "F403",
+    "F405",
+    "PT011",
+    "RUF005",
+    "SIM102",
+    "SIM108",
+    "TD002",
+    "TD003",
+    "TRY003",
+    "W191",
+    "C408",
+    "C420",
+    "S311",
+    "C901",
+    "D101",
+    "D102",
+    "D103",
+    "D107",
+    "D203",
+    "D400",
+    "D413",
+    "D415",
+    "PD901",
+    "S101",
+]
+select = [
+    "C4",
+    "E",
+    "F",
+    "W",
+    "C90",
+    "D",
+    "UP",
+    "S",
+    "T10",
+    "ICN",
+    "PIE",
+    "PYI",
+    "Q",
+    "I",
+    "RSE",
+    "TID",
+    "PD",
+    "NPY",
+    "RUF",
+]
+task-tags = [
+    "TODO",
+    "FIXME",
+    "Q",
+    "BUG",
+    "NB",
+    "XXX",
+    "NOTE",
+    "DEPRECATE",
+    "TEST",
+    "HACK",
+]
+unfixable = []
+
+[lint.isort]
+combine-as-imports = true
+required-imports = ["from __future__ import annotations"]
+
+[lint.per-file-ignores]
+"**/migrations/**/*.py" = ["D103", "D400", "D415"]
+"tests/**/*.py" = [
+    "D100",
+    "D103",
+    "B018",
+    "FBT001",
+    "S101",
+    "RUF003",
+    "B011",
+    "PLR2004",
+]
+
+[lint.pydocstyle]
+convention = "numpy"

@@ -1,0 +1,17 @@
+[build-system]
+build-backend = "setuptools.backends._legacy:_Backend"
+requires = ["setuptools>=75.0"]
+
+[tool.inline-snapshot]
+format-command = "ruff format --stdin-filename {filename}"
+
+[tool.pytest.ini_options]
+testpaths = ["py_src"]
+typeguard-packages = "py_src"
+
+[tool.setuptools.packages.find]
+where = ["py_src"]
+
+[tool.ty.environment]
+extra-paths = ["py_src"]
+python = ".devenv/state/venv"

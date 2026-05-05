@@ -65,3 +65,8 @@ venv/
 ### could be used for initial debugging of apps using `config` crate
 /config.toml
 **/rustc-ice*
+## Python
+.upload_py_lib.sh
+**/__pycache__/
+.py-env/
+.ruff_cache/
