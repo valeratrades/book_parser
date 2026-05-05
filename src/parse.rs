@@ -5,7 +5,7 @@ use std::{
 	path::Path,
 };
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 use quick_xml::{Reader, events::Event};
 use regex::Regex;
 
@@ -13,12 +13,12 @@ use crate::section::{book_root, paragraphs_to_md};
 
 pub fn run(file: &Path, chapter_pattern: Option<&str>, dir: &Path) -> Result<()> {
 	if !file.exists() {
-		return Err(eyre!("file '{}' does not exist", file.display()));
+		bail!("file '{}' does not exist", file.display());
 	}
 	let ext = file.extension().and_then(|e| e.to_str()).ok_or_else(|| eyre!("input file has no extension"))?;
 	match ext {
 		"txt" | "fb2" | "epub" => {}
-		_ => return Err(eyre!("unsupported extension '.{ext}', expected .txt, .fb2, or .epub")),
+		_ => bail!("unsupported extension '.{ext}', expected .txt, .fb2, or .epub"),
 	}
 	let stem = file.file_stem().ok_or_else(|| eyre!("input file has no stem"))?.to_string_lossy().to_string();
 	fs::write(v_utils::xdg_cache_file!("last_book_name"), &stem)?;
@@ -35,13 +35,13 @@ pub fn run(file: &Path, chapter_pattern: Option<&str>, dir: &Path) -> Result<()>
 		}
 		"fb2" => {
 			if chapter_pattern.is_some() {
-				return Err(eyre!("--chapter-pattern is not applicable to .fb2 files"));
+				bail!("--chapter-pattern is not applicable to .fb2 files");
 			}
 			parse_fb2(file, &sections_dir)?
 		}
 		"epub" => {
 			if chapter_pattern.is_some() {
-				return Err(eyre!("--chapter-pattern is not applicable to .epub files"));
+				bail!("--chapter-pattern is not applicable to .epub files");
 			}
 			parse_epub(file, &sections_dir)?
 		}
@@ -168,7 +168,7 @@ fn parse_fb2(input: &Path, outdir: &Path) -> Result<u32> {
 				},
 			Ok(Event::Eof) => break,
 			Err(e) => {
-				return Err(eyre!("FB2 parse error at {}: {e:?}", reader.buffer_position()));
+				bail!("FB2 parse error at {}: {e:?}", reader.buffer_position());
 			}
 			_ => {}
 		}

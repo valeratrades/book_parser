@@ -5,9 +5,10 @@ use std::{
 	sync::OnceLock,
 };
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 use regex::Regex;
 
+const LANGUAGE_FILE: &str = ".language";
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Stage {
 	Raw,
@@ -107,21 +108,21 @@ pub fn parse_range(s: &str) -> Result<PageRange> {
 		let end_raw = caps.get(3).map(|m| m.as_str().parse::<u32>()).transpose()?;
 		let until = match (inclusive, end_raw) {
 			(true, Some(n)) => Some(n),
-			(false, Some(0)) => return Err(eyre!("empty range: {part}")),
+			(false, Some(0)) => bail!("empty range: {part}"),
 			(false, Some(n)) => Some(n - 1),
-			(_, None) => return Err(eyre!("open-ended ranges not supported in lists: {part}")),
+			(_, None) => bail!("open-ended ranges not supported in lists: {part}"),
 		};
 		let since = since.ok_or_else(|| eyre!("open-ended ranges not supported in lists: {part}"))?;
 		let until = until.unwrap(); // guaranteed Some by above
 		if until < since {
-			return Err(eyre!("empty range: {part}"));
+			bail!("empty range: {part}");
 		}
 		for n in since..=until {
 			set.insert(n);
 		}
 	}
 	if set.is_empty() {
-		return Err(eyre!("empty range: '{s}'"));
+		bail!("empty range: '{s}'");
 	}
 	Ok(PageRange(Some(set)))
 }
@@ -150,8 +151,6 @@ pub fn book_root(base: &Path, name: &str) -> &'static PathBuf {
 	static ROOT: OnceLock<PathBuf> = OnceLock::new();
 	ROOT.get_or_init(|| base.join(name))
 }
-
-const LANGUAGE_FILE: &str = ".language";
 
 pub fn persist_language(root: &Path, language: &str) -> Result<()> {
 	fs::write(root.join(LANGUAGE_FILE), language)?;

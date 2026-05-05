@@ -4,7 +4,7 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail};
 use zip::{ZipWriter, write::FileOptions};
 
 use crate::section::{PageRange, Stage, book_root, collect_numbered, escape_xml, load_language, md_title};
@@ -16,7 +16,7 @@ pub fn run(name: &str, format: &str, force: bool, dir: &Path, out_dir: &Path) ->
 	let (stage, sections) = Stage::resolve_latest(root)?;
 
 	if sections.is_empty() {
-		return Err(eyre!("no section files found in any stage directory"));
+		bail!("no section files found in any stage directory");
 	}
 
 	let parsed = collect_numbered(&root.join(Stage::Raw.dir_name()), "section_", ".md")?;
@@ -30,13 +30,13 @@ pub fn run(name: &str, format: &str, force: bool, dir: &Path, out_dir: &Path) ->
 	let out_ext = match format {
 		"epub" => "epub",
 		"md" | "markdown" => "md",
-		_ => return Err(eyre!("unsupported format '{format}', expected epub or md")),
+		_ => bail!("unsupported format '{format}', expected epub or md"),
 	};
 	let lang_suffix = language.as_ref().map(|l| format!(".{l}")).unwrap_or_default();
 	let out_path = out_dir.join(format!("{name}{range}{lang_suffix}.{out_ext}"));
 
 	if out_path.exists() && !force {
-		return Err(eyre!("output file '{}' already exists (use --force to overwrite)", out_path.display()));
+		bail!("output file '{}' already exists (use --force to overwrite)", out_path.display());
 	}
 
 	match out_ext {

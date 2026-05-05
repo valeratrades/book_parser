@@ -1,6 +1,9 @@
-use std::{fs, path::Path};
+use std::{
+	fs,
+	path::{Path, PathBuf},
+};
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 use v_utils::io::{ConfirmResult, confirmation};
 
 use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language};
@@ -14,21 +17,14 @@ pub const MAX_EXPANSION: f32 = 3.0;
 const OLLAMA_BASE: &str = "http://localhost:11434";
 const OLLAMA_MODEL: &str = "translategemma:4b";
 
-async fn ollama_reachable() -> bool {
-	reqwest::Client::new()
-		.get(format!("{OLLAMA_BASE}/api/tags"))
-		.timeout(std::time::Duration::from_secs(3))
-		.send()
-		.await
-		.is_ok()
-}
-
+/// Temperatures to try for each chunk: default (0.0), then increasing jitter to escape repetition loops.
+const RETRY_TEMPERATURES: [f32; 3] = [0.0, 0.05, 0.15];
 /// Verify Ollama is running and the translate model is available.
 /// Offers to start Ollama and/or pull the model if needed.
 pub async fn preflight_ollama(yes: bool) -> Result<()> {
 	if !ollama_reachable().await {
 		if !yes && confirmation("Ollama is not running. Start it?").flush().await != ConfirmResult::Yes {
-			return Err(eyre!("Ollama is not reachable at {OLLAMA_BASE}"));
+			bail!("Ollama is not reachable at {OLLAMA_BASE}");
 		}
 		tokio::process::Command::new("ollama")
 			.arg("serve")
@@ -46,7 +42,7 @@ pub async fn preflight_ollama(yes: bool) -> Result<()> {
 			}
 		}
 		if !ollama_reachable().await {
-			return Err(eyre!("started `ollama serve` but it didn't become reachable within 10s"));
+			bail!("started `ollama serve` but it didn't become reachable within 10s");
 		}
 		eprintln!("Ollama started.");
 	}
@@ -66,7 +62,7 @@ pub async fn preflight_ollama(yes: bool) -> Result<()> {
 			eprintln!("available models: {available:?}");
 		}
 		if !yes && confirmation(&format!("model '{OLLAMA_MODEL}' not found. Pull it?")).flush().await != ConfirmResult::Yes {
-			return Err(eyre!("model '{OLLAMA_MODEL}' not available in Ollama"));
+			bail!("model '{OLLAMA_MODEL}' not available in Ollama");
 		}
 		eprintln!("pulling {OLLAMA_MODEL}...");
 		let status = tokio::process::Command::new("ollama")
@@ -75,27 +71,12 @@ pub async fn preflight_ollama(yes: bool) -> Result<()> {
 			.await
 			.map_err(|e| eyre!("failed to run `ollama pull`: {e}"))?;
 		if !status.success() {
-			return Err(eyre!("`ollama pull {OLLAMA_MODEL}` failed"));
+			bail!("`ollama pull {OLLAMA_MODEL}` failed");
 		}
 	}
 
 	Ok(())
 }
-
-/// Run a batch of futures, recording failures instead of aborting.
-/// Returns the count of failures in this batch.
-async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>) -> u32 {
-	let results = futures::future::join_all(futs).await;
-	let mut failed = 0u32;
-	for r in results {
-		if let Err(e) = r {
-			eprintln!("  {e}");
-			failed += 1;
-		}
-	}
-	failed
-}
-
 pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usize, force: bool, yes: bool, dir: &Path) -> Result<()> {
 	let root = book_root(dir, name);
 	let sections_dir = root.join(Stage::Raw.dir_name());
@@ -103,7 +84,7 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 	let fail_dir = root.join(Stage::Translated.fail_dir_name().unwrap());
 
 	if !sections_dir.exists() {
-		return Err(eyre!("sections not found at '{}' — run `from parse` or `from load` first", sections_dir.display()));
+		bail!("sections not found at '{}' — run `from parse` or `from load` first", sections_dir.display());
 	}
 
 	preflight_ollama(yes).await?;
@@ -127,7 +108,7 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 
 	// main pass
 	{
-		let mut to_translate: Vec<(u32, std::path::PathBuf)> = Vec::new();
+		let mut to_translate: Vec<(u32, PathBuf)> = Vec::new();
 		let mut skipped = 0u32;
 		for (num, path) in &sections {
 			if !force && translated_dir.join(format!("section_{num}.md")).exists() {
@@ -155,7 +136,7 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 	// retry failures
 	{
 		let fails = glob_fails(&fail_dir)?;
-		let mut to_retry: Vec<(u32, std::path::PathBuf)> = Vec::new();
+		let mut to_retry: Vec<(u32, PathBuf)> = Vec::new();
 		for fail in fails {
 			if !range.contains(fail.num) {
 				continue;
@@ -174,41 +155,11 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 	}
 
 	if total_failed > 0 {
-		return Err(eyre!("{total_failed} sections failed to translate (see .fail files). Re-run to retry."));
+		bail!("{total_failed} sections failed to translate (see .fail files). Re-run to retry.");
 	}
 	println!("translation done");
 	Ok(())
 }
-
-/// Split text into chunks of roughly `CHUNK_LIMIT` chars, breaking at paragraph boundaries (`\n`).
-/// The last chunk gets whatever remains without size-checking.
-fn chunk_plaintext(text: &str) -> Vec<&str> {
-	if text.len() <= CHUNK_LIMIT {
-		return vec![text];
-	}
-
-	let n_chunks = text.len().div_ceil(CHUNK_LIMIT);
-	let mut chunks = Vec::with_capacity(n_chunks);
-	let mut offset = 0;
-
-	for _ in 0..n_chunks - 1 {
-		let target = text.floor_char_boundary(offset + CHUNK_LIMIT);
-		// step back from target to find the last newline (paragraph boundary)
-		let cut = match text[offset..target].rfind('\n') {
-			Some(pos) => offset + pos + 1, // include the newline in the current chunk
-			None => target,                // no newline found, cut at limit
-		};
-		chunks.push(&text[offset..cut]);
-		offset = cut;
-	}
-	// last chunk: everything remaining
-	chunks.push(&text[offset..]);
-	chunks
-}
-
-/// Temperatures to try for each chunk: default (0.0), then increasing jitter to escape repetition loops.
-const RETRY_TEMPERATURES: [f32; 3] = [0.0, 0.05, 0.15];
-
 pub async fn translate_section(section: &Path, num: u32, language: &str, max_output_tokens: usize, out_dir: &Path, fail_dir: &Path) -> Result<()> {
 	let md = fs::read_to_string(section)?;
 	let plaintext = md_to_plaintext(&md);
@@ -262,7 +213,7 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 		}
 		if let Some(err) = last_err {
 			fs::write(fail_dir.join(format!("section_{num}.fail")), format!("translate\nlanguage={language}\n"))?;
-			return Err(eyre!("{err}"));
+			bail!("{err}");
 		}
 	}
 
@@ -274,4 +225,52 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 	println!("  section {num} translated");
 
 	Ok(())
+}
+async fn ollama_reachable() -> bool {
+	reqwest::Client::new()
+		.get(format!("{OLLAMA_BASE}/api/tags"))
+		.timeout(std::time::Duration::from_secs(3))
+		.send()
+		.await
+		.is_ok()
+}
+
+/// Run a batch of futures, recording failures instead of aborting.
+/// Returns the count of failures in this batch.
+async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>) -> u32 {
+	let results = futures::future::join_all(futs).await;
+	let mut failed = 0u32;
+	for r in results {
+		if let Err(e) = r {
+			eprintln!("  {e}");
+			failed += 1;
+		}
+	}
+	failed
+}
+
+/// Split text into chunks of roughly `CHUNK_LIMIT` chars, breaking at paragraph boundaries (`\n`).
+/// The last chunk gets whatever remains without size-checking.
+fn chunk_plaintext(text: &str) -> Vec<&str> {
+	if text.len() <= CHUNK_LIMIT {
+		return vec![text];
+	}
+
+	let n_chunks = text.len().div_ceil(CHUNK_LIMIT);
+	let mut chunks = Vec::with_capacity(n_chunks);
+	let mut offset = 0;
+
+	for _ in 0..n_chunks - 1 {
+		let target = text.floor_char_boundary(offset + CHUNK_LIMIT);
+		// step back from target to find the last newline (paragraph boundary)
+		let cut = match text[offset..target].rfind('\n') {
+			Some(pos) => offset + pos + 1, // include the newline in the current chunk
+			None => target,                // no newline found, cut at limit
+		};
+		chunks.push(&text[offset..cut]);
+		offset = cut;
+	}
+	// last chunk: everything remaining
+	chunks.push(&text[offset..]);
+	chunks
 }

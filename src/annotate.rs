@@ -1,21 +1,9 @@
 use std::{fs, path::Path, process::Stdio};
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail};
 use tokio::process::Command;
 
 use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, shell_escape};
-
-async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>) -> u32 {
-	let results = futures::future::join_all(futs).await;
-	let mut failed = 0u32;
-	for r in results {
-		if let Err(e) = r {
-			eprintln!("  {e}");
-			failed += 1;
-		}
-	}
-	failed
-}
 
 pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, max_jobs: usize, force: bool, dir: &Path) -> Result<()> {
 	let root = book_root(dir, name);
@@ -24,7 +12,7 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 	let fail_dir = root.join(Stage::Annotated.fail_dir_name().unwrap());
 
 	if !source_dir.exists() {
-		return Err(eyre!("source dir not found at '{}' — run `apply translate` first", source_dir.display()));
+		bail!("source dir not found at '{}' — run `apply translate` first", source_dir.display());
 	}
 
 	persist_language(root, language)?;
@@ -85,12 +73,11 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 	}
 
 	if total_failed > 0 {
-		return Err(eyre!("{total_failed} sections failed to annotate (see .fail files). Re-run to retry."));
+		bail!("{total_failed} sections failed to annotate (see .fail files). Re-run to retry.");
 	}
 	println!("annotation done");
 	Ok(())
 }
-
 pub async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir: &Path, out_dir: &Path, fail_dir: &Path) -> Result<()> {
 	let source_md_path = source_dir.join(format!("section_{num}.md"));
 	let md = fs::read_to_string(&source_md_path)?;
@@ -111,7 +98,7 @@ pub async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir
 
 	if !status.success() {
 		fs::write(fail_dir.join(format!("section_{num}.fail")), format!("annotate\nlanguage={language}\nwlimit={wlimit}\n"))?;
-		return Err(eyre!("translate_infrequent failed for section {num}"));
+		bail!("translate_infrequent failed for section {num}");
 	}
 
 	let translated = fs::read_to_string(&tmp_out)?;
@@ -123,4 +110,15 @@ pub async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir
 	println!("  section {num} annotated");
 
 	Ok(())
+}
+async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>) -> u32 {
+	let results = futures::future::join_all(futs).await;
+	let mut failed = 0u32;
+	for r in results {
+		if let Err(e) = r {
+			eprintln!("  {e}");
+			failed += 1;
+		}
+	}
+	failed
 }

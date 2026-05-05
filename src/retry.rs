@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail};
 
 use crate::{
 	section::{Stage, book_root, glob_fails},
@@ -16,13 +16,13 @@ pub async fn run(name: &str, max_jobs: usize, force: bool, yes: bool, dir: &Path
 	let translate_fails = glob_fails(&translate_fail_dir)?;
 	for f in &translate_fails {
 		if f.stage != "translate" {
-			return Err(eyre!("unexpected stage '{}' in {}", f.stage, f.path.display()));
+			bail!("unexpected stage '{}' in {}", f.stage, f.path.display());
 		}
 	}
 	let annotate_fails = glob_fails(&annotate_fail_dir)?;
 	for f in &annotate_fails {
 		if f.stage != "annotate" {
-			return Err(eyre!("unexpected stage '{}' in {}", f.stage, f.path.display()));
+			bail!("unexpected stage '{}' in {}", f.stage, f.path.display());
 		}
 	}
 
@@ -102,7 +102,7 @@ pub async fn run(name: &str, max_jobs: usize, force: bool, yes: bool, dir: &Path
 	let remaining_annotate = glob_fails(&annotate_fail_dir).map(|v| v.len()).unwrap_or(0);
 	let remaining = remaining_translate + remaining_annotate;
 	if remaining > 0 {
-		return Err(eyre!("{remaining} sections still failing after retry (see .fail files)"));
+		bail!("{remaining} sections still failing after retry (see .fail files)");
 	}
 
 	println!("retry done");

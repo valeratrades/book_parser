@@ -43,7 +43,7 @@ pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force
 	}
 
 	let n_chunks = pages_to_load.len().div_ceil(parallel);
-	println!("loading {} pages in {} chunks of {} -> {}", pages_to_load.len(), n_chunks, parallel, sections_dir.display());
+	println!("loading {} pages in {n_chunks} chunks of {parallel} -> {}", pages_to_load.len(), sections_dir.display());
 
 	let client = Client::builder()
 		.user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -65,7 +65,7 @@ pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force
 	if let Some(gap) = enforce_contiguous(&sections_dir, start, end) {
 		let loaded = gap - start;
 		println!("loaded {loaded} contiguous pages ({start}..={})", gap - 1);
-		return Err(eyre!("stopped at page {gap} (gap in sequence)"));
+		bail!("stopped at page {gap} (gap in sequence)");
 	}
 
 	println!("loaded all {} pages ({start}..={end})", end - start + 1);
@@ -83,7 +83,7 @@ fn parse_load_url(url: &str) -> Result<(String, u32, u32)> {
 	let end = if inclusive { end_raw } else { end_raw - 1 };
 
 	if end < start {
-		return Err(eyre!("empty range: {start}..{end_raw}"));
+		bail!("empty range: {start}..{end_raw}");
 	}
 
 	let m = caps.get(0).unwrap();
@@ -133,7 +133,7 @@ async fn scrape_page(client: &Client, url: &str, css_selector_strings: &[String]
 
 	let mut css_selectors = Vec::with_capacity(css_selector_strings.len());
 	for s in css_selector_strings.iter() {
-		let selector = Selector::parse(s).map_err(|e| eyre!("Invalid CSS selector: {}. Error: {}", s, e))?;
+		let selector = Selector::parse(s).map_err(|e| eyre!("Invalid CSS selector: {s}. Error: {e}"))?;
 		css_selectors.push(selector);
 	}
 
@@ -156,7 +156,7 @@ async fn scrape_page(client: &Client, url: &str, css_selector_strings: &[String]
 		}
 	};
 
-	let content_selector = Selector::parse("h1, h2, h3, h4, h5, h6, p, div.subtitle").map_err(|e| eyre!("Internal error: Invalid content block selector: {}", e))?;
+	let content_selector = Selector::parse("h1, h2, h3, h4, h5, h6, p, div.subtitle").map_err(|e| eyre!("Internal error: Invalid content block selector: {e}"))?;
 
 	let mut content_blocks = Vec::new();
 
@@ -171,12 +171,12 @@ async fn scrape_page(client: &Client, url: &str, css_selector_strings: &[String]
 
 		let formatted_block = match tag_name {
 			"p" => text,
-			"h1" => format!("# {}", text),
-			"h2" => format!("## {}", text),
-			"h3" => format!("### {}", text),
-			"h4" => format!("#### {}", text),
-			"h5" => format!("##### {}", text),
-			"h6" => format!("###### {}", text),
+			"h1" => format!("# {text}"),
+			"h2" => format!("## {text}"),
+			"h3" => format!("### {text}"),
+			"h4" => format!("#### {text}"),
+			"h5" => format!("##### {text}"),
+			"h6" => format!("###### {text}"),
 			"div" =>
 				if element.value().has_class("subtitle", scraper::CaseSensitivity::CaseSensitive) && text == "* * *" {
 					"#### * * *".to_owned()

@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, bail, eyre};
 use v_utils::io::{ConfirmResult, confirmation};
 
 mod annotate;
@@ -31,14 +31,6 @@ struct Cli {
 	cmd: Cmd,
 }
 
-fn default_dir() -> PathBuf {
-	dirs::home_dir().expect("no home directory").join("tmp/process_book")
-}
-
-fn default_out_dir() -> PathBuf {
-	dirs::home_dir().expect("no home directory").join("Downloads")
-}
-
 #[derive(Subcommand)]
 enum Cmd {
 	/// Ingest a book from a local file or URL (use subcommand to specify)
@@ -65,7 +57,6 @@ enum Cmd {
 		out: PathBuf,
 	},
 }
-
 #[derive(Subcommand)]
 enum FromCmd {
 	/// Split a local book file into sections
@@ -110,7 +101,6 @@ enum FromCmd {
 		timeout: u64,
 	},
 }
-
 #[derive(Subcommand)]
 enum ApplyCmd {
 	/// LLM-translate sections
@@ -137,44 +127,6 @@ enum ApplyCmd {
 	/// Retry all failed sections (reads settings from .fail files)
 	Retry,
 }
-
-#[derive(Clone, ValueEnum)]
-enum OutputFormat {
-	Epub,
-	Md,
-	Markdown,
-}
-
-impl std::fmt::Display for OutputFormat {
-	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-		match self {
-			OutputFormat::Epub => write!(f, "epub"),
-			OutputFormat::Md | OutputFormat::Markdown => write!(f, "md"),
-		}
-	}
-}
-
-fn resolve_name(provided: Option<String>, yes: bool) -> Result<String> {
-	let cache_path = v_utils::xdg_cache_file!("last_book_name");
-	match provided {
-		Some(name) => {
-			fs::write(&cache_path, &name)?;
-			Ok(name)
-		}
-		None => {
-			let cached = fs::read_to_string(&cache_path).map_err(|_| eyre!("no book name provided and no cached name found"))?;
-			let cached = cached.trim().to_string();
-			if cached.is_empty() {
-				return Err(eyre!("no book name provided and cached name is empty"));
-			}
-			if !yes && confirmation(&format!("proceed with '{cached}'?")).flush_blocking() != ConfirmResult::Yes {
-				return Err(eyre!("aborted"));
-			}
-			Ok(cached)
-		}
-	}
-}
-
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
 	v_utils::clientside!();
@@ -210,4 +162,48 @@ async fn main() -> Result<()> {
 	}
 
 	Ok(())
+}
+fn default_dir() -> PathBuf {
+	dirs::home_dir().expect("no home directory").join("tmp/process_book")
+}
+
+fn default_out_dir() -> PathBuf {
+	dirs::home_dir().expect("no home directory").join("Downloads")
+}
+
+#[derive(Clone, ValueEnum)]
+enum OutputFormat {
+	Epub,
+	Md,
+	Markdown,
+}
+
+impl std::fmt::Display for OutputFormat {
+	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+		match self {
+			OutputFormat::Epub => write!(f, "epub"),
+			OutputFormat::Md | OutputFormat::Markdown => write!(f, "md"),
+		}
+	}
+}
+
+fn resolve_name(provided: Option<String>, yes: bool) -> Result<String> {
+	let cache_path = v_utils::xdg_cache_file!("last_book_name");
+	match provided {
+		Some(name) => {
+			fs::write(&cache_path, &name)?;
+			Ok(name)
+		}
+		None => {
+			let cached = fs::read_to_string(&cache_path).map_err(|_| eyre!("no book name provided and no cached name found"))?;
+			let cached = cached.trim().to_string();
+			if cached.is_empty() {
+				bail!("no book name provided and cached name is empty");
+			}
+			if !yes && confirmation(&format!("proceed with '{cached}'?")).flush_blocking() != ConfirmResult::Yes {
+				bail!("aborted");
+			}
+			Ok(cached)
+		}
+	}
 }
