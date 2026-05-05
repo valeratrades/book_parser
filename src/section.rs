@@ -177,12 +177,12 @@ pub fn collect_numbered(dir: &Path, prefix: &str, suffix: &str) -> Result<Vec<(u
 			continue;
 		}
 		let name = e.file_name().to_string_lossy().to_string();
-		if name.starts_with(prefix) && name.ends_with(suffix) {
-			if let Some(c) = num_re.captures(&name) {
-				if let Ok(n) = c[1].parse::<u32>() {
-					v.push((n, p));
-				}
-			}
+		if name.starts_with(prefix)
+			&& name.ends_with(suffix)
+			&& let Some(c) = num_re.captures(&name)
+			&& let Ok(n) = c[1].parse::<u32>()
+		{
+			v.push((n, p));
 		}
 	}
 	v.sort_by_key(|(n, _)| *n);
@@ -211,7 +211,7 @@ pub fn glob_fails(dir: &Path) -> Result<Vec<FailInfo>> {
 	for e in fs::read_dir(dir)? {
 		let e = e?;
 		let p = e.path();
-		if !p.is_file() || !p.extension().is_some_and(|x| x == "fail") {
+		if !p.is_file() || p.extension().is_none_or(|x| x != "fail") {
 			continue;
 		}
 		let fname = e.file_name().to_string_lossy().to_string();

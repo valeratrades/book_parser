@@ -8,22 +8,22 @@ edition = "2024"
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 
 [dependencies]
-ask_llm = { version = "~2.2.1", default-features = false }
-clap = { version = "^4.5.37", features = ["derive"] }
-color-eyre = "^0.6.5"
-dirs = "^6"
-futures = "^0.3"
-miette = { version = "7.6.0", features = ["fancy", "syntect-highlighter", "serde"] }
-quick-xml = "^0.39"
-regex = "^1"
-reqwest = { version = "^0.13.2", default-features = false, features = ["json", "charset", "http2"] }
-scraper = "^0.25.0"
-serde = { version = "^1.0.228", features = ["derive"] }
-serde_json = "^1.0.149"
-tokio = { version = "^1.49.0", features = ["macros", "rt-multi-thread", "process", "fs", "io-util", "time"] }
-tracing = "^0.1.44"
-v_utils = { version = "^2.15.30", features = ["async-io"] }
-zip = "^8"
+ask_llm = { version = "=2.2.2", default-features = false }
+clap = { version = "=4.6.1", features = ["derive"] }
+color-eyre = "=0.6.5"
+dirs = "=6.0.0"
+futures = "=0.3.32"
+miette = { version = "=7.6.0", features = ["fancy", "syntect-highlighter", "serde"] }
+quick-xml = "=0.39.3"
+regex = "=1.12.3"
+reqwest = { version = "=0.13.3", default-features = false, features = ["json", "charset", "http2"] }
+scraper = "=0.26.0"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+tokio = { version = "=1.52.2", features = ["macros", "rt-multi-thread", "process", "fs", "io-util", "time"] }
+tracing = "=0.1.44"
+v_utils = { version = "=2.15.41", features = ["async-io"] }
+zip = "=8.6.0"
 
 [lints.clippy]
 # Stable

@@ -70,18 +70,18 @@ fn parse_txt(input: &Path, chapter_re: &Regex, outdir: &Path) -> Result<u32> {
 
 	for line in r.lines() {
 		let line = line?;
-		if chapter_re.is_match(&line) {
-			if let Some(m) = num_re.find(&line) {
-				if let Some(num) = current_num {
-					flush(num, current_title.as_deref(), &current_lines, outdir)?;
-					count += 1;
-				}
-				let num: u32 = line[m.start()..m.end()].parse().unwrap();
-				current_num = Some(num);
-				current_title = Some(line.clone());
-				current_lines.clear();
-				continue;
+		if chapter_re.is_match(&line)
+			&& let Some(m) = num_re.find(&line)
+		{
+			if let Some(num) = current_num {
+				flush(num, current_title.as_deref(), &current_lines, outdir)?;
+				count += 1;
 			}
+			let num: u32 = line[m.start()..m.end()].parse().unwrap();
+			current_num = Some(num);
+			current_title = Some(line.clone());
+			current_lines.clear();
+			continue;
 		}
 		if current_num.is_some() {
 			current_lines.push(line);
@@ -148,15 +148,13 @@ fn parse_fb2(input: &Path, outdir: &Path) -> Result<u32> {
 					section_depth = section_depth.saturating_sub(1);
 				} else if name.as_ref() == b"title" {
 					in_title = false;
-					if current_num.is_none() {
-						if let Some(m) = num_re.find(&title_text) {
-							current_num = Some(title_text[m.start()..m.end()].parse().unwrap());
-						}
+					if current_num.is_none()
+						&& let Some(m) = num_re.find(&title_text)
+					{
+						current_num = Some(title_text[m.start()..m.end()].parse().unwrap());
 					}
-				} else if in_section && name.as_ref() == b"p" && !in_title {
-					if !current_para.is_empty() {
-						paragraphs.push(std::mem::take(&mut current_para));
-					}
+				} else if in_section && name.as_ref() == b"p" && !in_title && !current_para.is_empty() {
+					paragraphs.push(std::mem::take(&mut current_para));
 				}
 			}
 			Ok(Event::Text(e)) =>

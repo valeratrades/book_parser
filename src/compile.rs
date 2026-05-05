@@ -59,7 +59,7 @@ fn compile_epub(sections: &[(u32, PathBuf)], language: Option<&str>, out: &Path)
 	zip.start_file("mimetype", opts_stored)?;
 	zip.write_all(b"application/epub+zip")?;
 
-	zip.start_file("META-INF/container.xml", opts.clone())?;
+	zip.start_file("META-INF/container.xml", opts)?;
 	zip.write_all(
 		b"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
 		  <container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n\
@@ -72,7 +72,7 @@ fn compile_epub(sections: &[(u32, PathBuf)], language: Option<&str>, out: &Path)
 	for (num, path) in sections {
 		let md = fs::read_to_string(path)?;
 		let xhtml = md_to_xhtml(&md, *num);
-		zip.start_file(format!("OEBPS/section_{num}.xhtml"), opts.clone())?;
+		zip.start_file(format!("OEBPS/section_{num}.xhtml"), opts)?;
 		zip.write_all(xhtml.as_bytes())?;
 	}
 
@@ -98,7 +98,7 @@ fn compile_epub(sections: &[(u32, PathBuf)], language: Option<&str>, out: &Path)
 	}
 	opf.push_str("</spine>\n</package>\n");
 
-	zip.start_file("OEBPS/content.opf", opts.clone())?;
+	zip.start_file("OEBPS/content.opf", opts)?;
 	zip.write_all(opf.as_bytes())?;
 
 	let mut nav = String::from(

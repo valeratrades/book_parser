@@ -42,7 +42,7 @@ pub async fn run(url: &str, css: &[String], parallel: usize, timeout: u64, force
 		return Ok(());
 	}
 
-	let n_chunks = (pages_to_load.len() + parallel - 1) / parallel;
+	let n_chunks = pages_to_load.len().div_ceil(parallel);
 	println!("loading {} pages in {} chunks of {} -> {}", pages_to_load.len(), n_chunks, parallel, sections_dir.display());
 
 	let client = Client::builder()

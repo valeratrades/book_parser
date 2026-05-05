@@ -187,7 +187,7 @@ fn chunk_plaintext(text: &str) -> Vec<&str> {
 		return vec![text];
 	}
 
-	let n_chunks = (text.len() + CHUNK_LIMIT - 1) / CHUNK_LIMIT;
+	let n_chunks = text.len().div_ceil(CHUNK_LIMIT);
 	let mut chunks = Vec::with_capacity(n_chunks);
 	let mut offset = 0;
 

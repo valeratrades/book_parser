@@ -41,7 +41,7 @@ fn default_out_dir() -> PathBuf {
 
 #[derive(Subcommand)]
 enum Cmd {
-	/// Ingest a book from a local file or URL
+	/// Ingest a book from a local file or URL (use subcommand to specify)
 	From {
 		#[command(subcommand)]
 		source: FromCmd,
@@ -79,9 +79,25 @@ enum FromCmd {
 	},
 	/// Scrape pages from a URL range
 	///
-	/// URL format: https://site.com/b/12345/read#t1..100
+	/// The trailing `N..M` (exclusive) or `N..=M` (inclusive) is stripped and each
+	/// page number substituted in its place to build per-page URLs. The range must
+	/// sit at the very end of the URL (an optional trailing `/` is allowed). Open-ended
+	/// ranges like `5..` or `..=20` are NOT supported here (only in `apply --range`).
+	///
+	/// Examples:
+	///   # path-segment range, inclusive (chapter/1/, chapter/2/, ..., chapter/2980/)
+	///   book_parser from load 'https://lightnovelworld.org/novel/shadow-slave/chapter/1..=2980/' \
+	///     --css '#chapter-container'
+	///
+	///   # exclusive: 1..100 fetches pages 1..=99
+	///   book_parser from load 'https://example.com/b/123/read#t1..100' --css '.content'
+	///
+	///   # multiple selector fallbacks (first matching wins per page)
+	///   book_parser from load 'https://site.com/novel/foo/ch-1..=500' \
+	///     --css '#chapter-content' --css 'article.post' --css '.entry-content'
 	Load {
-		/// URL with trailing range, e.g. https://example.com/b/123/read#t1..50
+		/// URL whose trailing `N..M` or `N..=M` is replaced by each page number.
+		/// E.g. `https://example.com/b/123/chapter/1..=50/` expands to `.../chapter/1/`..`.../chapter/50/`.
 		url: String,
 		/// CSS selectors for content extraction (can be repeated)
 		#[arg(short, long)]

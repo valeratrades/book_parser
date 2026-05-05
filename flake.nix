@@ -1,13 +1,12 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-overlay.url = "github:oxalica/rust-overlay";
-    flake-utils.url = "github:numtide/flake-utils";
-    pre-commit-hooks.url = "github:cachix/git-hooks.nix";
-    v-utils.url = "github:valeratrades/.github?ref=v1.3";
+    nixpkgs.url = "github:NixOS/nixpkgs/b3d51a0365f6695e7dd5cdf3e180604530ed33b4";
+    rust-overlay.url = "github:oxalica/rust-overlay/3a0ebe5d2965692f990cb27e62f501ad35e3deeb";
+    flake-utils.url = "github:numtide/flake-utils/11707dc2f618dd54ca8739b309ec4fc024de578b";
+    v_flakes.url = "github:valeratrades/v_flakes/257142a54b071bb8a8b2e031d69e70f416518a5f";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v-utils }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, v_flakes }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
@@ -22,25 +21,27 @@
 
         manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
         pname = manifest.name;
-        pre-commit-check = pre-commit-hooks.lib.${system}.run (v-utils.files.preCommit { inherit pkgs; });
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
 
-        github = v-utils.github {
-          inherit pkgs pname;
+        rs = v_flakes.rs { inherit pkgs rust; };
+        github = v_flakes.github {
+          inherit pkgs pname rs;
+          enable = true;
           lastSupportedVersion = "nightly-2025-10-10";
-          jobsErrors = [ "rust-tests" ];
-          jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
-          jobsOther = [ "loc-badge" ];
-          langs = [ "rs" ];
+          jobs = {
+            errors.replace = [ "rust-tests" ];
+            warnings.replace = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
+            other.replace = [ "loc-badge" ];
+          };
         };
-        rs = v-utils.rs { inherit pkgs; };
-        readme = v-utils.readme-fw {
+        readme = v_flakes.readme-fw {
           inherit pkgs pname;
           lastSupportedVersion = "nightly-1.92";
           rootDir = ./.;
-          licenses = [{ name = "Blue Oak 1.0.0"; outPath = "LICENSE"; }];
+          licenses = [{ license = v_flakes.files.licenses.blue_oak; }];
           badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
         };
+        combined = v_flakes.utils.combine [ rs github readme ];
       in
       {
         packages =
@@ -67,15 +68,7 @@
           with pkgs;
           mkShell {
             inherit stdenv;
-            shellHook =
-              pre-commit-check.shellHook +
-              github.shellHook +
-              rs.shellHook +
-              ''
-                cp -f ${v-utils.files.licenses.blue_oak} ./LICENSE
-                cp -f ${(v-utils.files.treefmt) { inherit pkgs; }} ./.treefmt.toml
-                cp -f ${readme} ./README.md
-              '';
+            shellHook = combined.shellHook;
 
             env = {
               RUST_BACKTRACE = 1;
@@ -86,7 +79,7 @@
               mold
               pkg-config
               rust
-            ] ++ pre-commit-check.enabledPackages ++ github.enabledPackages;
+            ] ++ combined.enabledPackages;
           };
       }
     );
