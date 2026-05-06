@@ -49,10 +49,14 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"chatterbox: loading model on {device}", file=sys.stderr)
 model = ChatterboxTTS.from_pretrained(device=device)
 
+all_chunks = list(chunks(text))
+total = len(all_chunks)
+print(f"PROGRESS 0/{total}", flush=True)
 waves = []
-for i, chunk in enumerate(chunks(text)):
-    print(f"chatterbox: chunk {i + 1} ({len(chunk)} chars)", file=sys.stderr)
+for i, chunk in enumerate(all_chunks, 1):
+    print(f"chatterbox: chunk {i} ({len(chunk)} chars)", file=sys.stderr)
     waves.append(model.generate(chunk))
+    print(f"PROGRESS {i}/{total}", flush=True)
 
 if not waves:
     print("error: no audio generated", file=sys.stderr)

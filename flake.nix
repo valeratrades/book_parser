@@ -32,7 +32,9 @@
           stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
           python = pkgs.python312;
 
-          rs = v_flakes.rs { inherit pkgs rust; };
+          rs = v_flakes.rs {
+            inherit pkgs rust;
+          };
           py = v_flakes.py { inherit pkgs; };
           github = v_flakes.github {
             inherit pkgs pname rs py;

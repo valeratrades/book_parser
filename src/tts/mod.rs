@@ -5,7 +5,11 @@ use std::{
 };
 
 use color_eyre::eyre::{Result, bail, eyre};
-use tokio::{io::AsyncWriteExt, process::Command};
+use indicatif::{ProgressBar, ProgressStyle};
+use tokio::{
+	io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+	process::Command,
+};
 
 const KOKORO_SCRIPT: &str = include_str!("kokoro.py");
 const CHATTERBOX_SCRIPT: &str = include_str!("chatterbox.py");
@@ -58,7 +62,7 @@ pub async fn run(input: &Path, output: &Path, model: Model) -> Result<()> {
 		.arg(input)
 		.arg(&out_path)
 		.stdin(Stdio::piped())
-		.stdout(Stdio::inherit())
+		.stdout(Stdio::piped())
 		.stderr(Stdio::inherit())
 		.spawn()
 		.map_err(|e| eyre!("failed to spawn `uv run`: {e}"))?;
@@ -68,11 +72,33 @@ pub async fn run(input: &Path, output: &Path, model: Model) -> Result<()> {
 	stdin.shutdown().await?;
 	drop(stdin);
 
+	let stdout = child.stdout.take().expect("stdout was piped");
+	let mut reader = BufReader::new(stdout).lines();
+	let bar = ProgressBar::new(0);
+	bar.set_style(ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} chunks  elapsed {elapsed_precise}  eta {eta_precise}").expect("static template"));
+	while let Some(line) = reader.next_line().await? {
+		match parse_progress(&line) {
+			Some((cur, total)) => {
+				bar.set_length(total);
+				bar.set_position(cur);
+			}
+			None => bar.println(line),
+		}
+	}
+	bar.finish_and_clear();
+
 	let status = child.wait().await?;
 	if !status.success() {
 		bail!("{} TTS script failed (exit {status})", model.label());
 	}
 	Ok(())
+}
+
+/// Parse a `PROGRESS <cur>/<total>` line emitted by the TTS python scripts.
+fn parse_progress(line: &str) -> Option<(u64, u64)> {
+	let rest = line.strip_prefix("PROGRESS ")?;
+	let (cur, total) = rest.split_once('/')?;
+	Some((cur.parse().ok()?, total.parse().ok()?))
 }
 
 /// Output is either an existing directory (file written as `<input_stem>.wav` inside),
