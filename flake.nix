@@ -1,15 +1,14 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-overlay.url = "github:oxalica/rust-overlay";
-    flake-parts.url = "github:hercules-ci/flake-parts";
-    devenv.url = "github:cachix/devenv/v1.6.1";
-    pre-commit-hooks.url = "github:cachix/git-hooks.nix";
     v_flakes.url = "github:valeratrades/v_flakes?ref=v1.6";
   };
 
-  outputs = inputs@{ self, nixpkgs, rust-overlay, flake-parts, devenv, pre-commit-hooks, v_flakes }:
-    flake-parts.lib.mkFlake { inherit inputs; } {
+  outputs = inputs@{ self, v_flakes }:
+    let
+      inherit (v_flakes) flake-parts devenv nixpkgs pre-commit-hooks;
+    in
+    # devenv's flakeModule evaluates `inputs.nixpkgs.lib`, so nixpkgs has to reach it as a flake.
+    flake-parts.lib.mkFlake { inputs = inputs // { inherit nixpkgs; }; } {
       imports = [
         devenv.flakeModule
       ];
@@ -18,14 +17,11 @@
 
       perSystem = { config, self', inputs', system, ... }:
         let
-          pkgs = import nixpkgs {
+          pkgs = import v_flakes.default_nixpkgs {
             inherit system;
-            overlays = [ (import rust-overlay) ];
             config.allowUnfree = true;
           };
-          rust = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
-            extensions = [ "rust-src" "rust-analyzer" "rust-docs" "rustc-codegen-cranelift-preview" ];
-          });
+          rust = v_flakes.rs.default_nightly system;
           pre-commit-check = pre-commit-hooks.lib.${system}.run (v_flakes.files.preCommit { inherit pkgs; });
           manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
           pname = manifest.name;
@@ -39,7 +35,7 @@
           github = v_flakes.github {
             inherit pkgs pname rs py;
             enable = true;
-            lastSupportedVersion = "nightly-2025-10-10";
+            lastSupportedVersion = "nightly-${v_flakes.rs.nightly_version}";
             jobs = {
               errors.replace = [ "rust-tests" ];
               warnings.replace = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
@@ -53,7 +49,7 @@
             licenses = [{ license = v_flakes.files.licenses.blue_oak; }];
             badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
           };
-          combined = v_flakes.utils.combine [ rs py github readme ];
+          combined = v_flakes.utils.combine { inherit rust; modules = [ rs py github readme ]; };
 
           # Native libs that prebuilt Python wheels (numpy, torch, kokoro deps) dlopen at runtime.
           pyRuntimeLibs = with pkgs; [
@@ -78,6 +74,7 @@
 
             cargoLock.lockFile = ./Cargo.lock;
             src = pkgs.lib.cleanSource ./.;
+            RUSTC_WRAPPER = ""; # .cargo/config.toml asks for sccache, which the build sandbox has not got
           };
 
           devenv.shells.default = {
