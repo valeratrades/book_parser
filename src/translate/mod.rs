@@ -18,7 +18,9 @@ const OLLAMA_BASE: &str = "http://localhost:11434";
 const OLLAMA_MODEL: &str = "translategemma:4b";
 
 /// Temperatures to try for each chunk: default (0.0), then increasing jitter to escape repetition loops.
-const RETRY_TEMPERATURES: [f32; 3] = [0.0, 0.05, 0.15];
+/// The ladder used to be a temperature sweep; ask_llm 3 pins ollama to 0.0, so what is
+/// left is plain repetition against a model that still varies run to run.
+const TRANSLATE_ATTEMPTS: usize = 3;
 /// Verify Ollama is running and the translate model is available.
 /// Offers to start Ollama and/or pull the model if needed.
 pub async fn preflight_ollama(yes: bool) -> Result<()> {
@@ -175,14 +177,14 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 		let q = format!("Translate provided text to {language}: ```{chunk}```. Output as a codeblock.");
 
 		let mut last_err = None;
-		for (attempt, &temp) in RETRY_TEMPERATURES.iter().enumerate() {
-			let client = ask_llm::Client::default().model(ask_llm::Model::Translate).max_tokens(max_output_tokens).temperature(temp);
+		for attempt in 0..TRANSLATE_ATTEMPTS {
+			let client = ask_llm::Client::default().model(ask_llm::Model::Translate).max_tokens(max_output_tokens);
 
 			let answer = match client.ask(q.clone()).await {
 				Ok(a) => a,
 				Err(e) => {
 					last_err = Some(format!("LLM failed for section {num} chunk {i}: {e}"));
-					tracing::warn!("section {num} chunk {i} attempt {attempt} (temp={temp}): LLM error, retrying");
+					tracing::warn!("section {num} chunk {i} attempt {attempt}: LLM error, retrying");
 					continue;
 				}
 			};
@@ -192,7 +194,7 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 				Ok(cb) => cb,
 				Err(_) => {
 					last_err = Some(format!("LLM failed to produce codeblock for section {num} chunk {i}"));
-					tracing::warn!("section {num} chunk {i} attempt {attempt} (temp={temp}): no codeblock, retrying");
+					tracing::warn!("section {num} chunk {i} attempt {attempt}: no codeblock, retrying");
 					continue;
 				}
 			};
@@ -203,7 +205,7 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 					part.len(),
 					chunk.len()
 				));
-				tracing::warn!("section {num} chunk {i} attempt {attempt} (temp={temp}): {ratio:.1}× expansion, retrying");
+				tracing::warn!("section {num} chunk {i} attempt {attempt}: {ratio:.1}× expansion, retrying");
 				continue;
 			}
 
