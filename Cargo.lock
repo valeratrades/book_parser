@@ -109,8 +109,6 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 [[package]]
 name = "ask_llm"
 version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a21180d8730ed6d102b62ff165e611b50b3fe7ecbf08ca4bfe96d16a43301a2b"
 dependencies = [
  "base64",
  "bytes",
@@ -123,6 +121,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "v_utils",

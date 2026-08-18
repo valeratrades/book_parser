@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::{Result, bail, eyre};
+use indicatif::{ProgressBar, ProgressStyle};
 use v_utils::io::{ConfirmResult, confirmation};
 
 mod annotate;
@@ -11,7 +12,8 @@ mod parse;
 mod retry;
 mod section;
 mod translate;
-mod tts;
+
+use ask_llm::tts;
 
 #[derive(Parser)]
 #[command(author, version, about = "Book processing pipeline")]
@@ -204,7 +206,14 @@ async fn main() -> Result<()> {
 			compile::run(&name, &format.to_string(), cli.force, &cli.dir, &out)?;
 		}
 		Cmd::Tts { input, output, model } => {
-			tts::run(&input, &output, model.into()).await?;
+			let bar = ProgressBar::new(0);
+			bar.set_style(ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} chunks  elapsed {elapsed_precise}  eta {eta_precise}").expect("static template"));
+			tts::run(&input, &output, model.into(), |cur, total| {
+				bar.set_length(total);
+				bar.set_position(cur);
+			})
+			.await?;
+			bar.finish_and_clear();
 		}
 	}
 
