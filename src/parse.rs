@@ -118,9 +118,9 @@ fn parse_fb2(input: &Path, outdir: &Path) -> Result<u32> {
 		match reader.read_event_into(&mut buf) {
 			Ok(Event::Start(e)) => {
 				let name = e.name();
-				if name.as_ref() == b"body" {
+				if name.as_ref() == "body" {
 					in_body = true;
-				} else if in_body && name.as_ref() == b"section" {
+				} else if in_body && name.as_ref() == "section" {
 					section_depth += 1;
 					if section_depth == 1 {
 						in_section = true;
@@ -128,16 +128,16 @@ fn parse_fb2(input: &Path, outdir: &Path) -> Result<u32> {
 						paragraphs.clear();
 						current_num = None;
 					}
-				} else if in_section && name.as_ref() == b"title" {
+				} else if in_section && name.as_ref() == "title" {
 					in_title = true;
 					title_text.clear();
 				}
 			}
 			Ok(Event::End(e)) => {
 				let name = e.name();
-				if name.as_ref() == b"body" {
+				if name.as_ref() == "body" {
 					in_body = false;
-				} else if name.as_ref() == b"section" {
+				} else if name.as_ref() == "section" {
 					if section_depth == 1 {
 						if let Some(num) = current_num {
 							let refs: Vec<&str> = paragraphs.iter().map(|s| s.as_str()).collect();
@@ -149,20 +149,20 @@ fn parse_fb2(input: &Path, outdir: &Path) -> Result<u32> {
 						in_section = false;
 					}
 					section_depth = section_depth.saturating_sub(1);
-				} else if name.as_ref() == b"title" {
+				} else if name.as_ref() == "title" {
 					in_title = false;
 					if current_num.is_none()
 						&& let Some(m) = num_re.find(&title_text)
 					{
 						current_num = Some(title_text[m.start()..m.end()].parse().unwrap());
 					}
-				} else if in_section && name.as_ref() == b"p" && !in_title && !current_para.is_empty() {
+				} else if in_section && name.as_ref() == "p" && !in_title && !current_para.is_empty() {
 					paragraphs.push(std::mem::take(&mut current_para));
 				}
 			}
 			Ok(Event::Text(e)) =>
 				if in_section {
-					let text = e.decode().unwrap_or_default();
+					let text = quick_xml::escape::unescape(&e).unwrap_or_default();
 					if in_title {
 						title_text.push_str(&text);
 					} else if current_num.is_some() {
@@ -256,11 +256,11 @@ fn extract_paragraphs_from_xhtml(xhtml: &str) -> Vec<String> {
 	let mut current = String::new();
 	loop {
 		match reader.read_event_into(&mut buf) {
-			Ok(Event::Start(e)) if e.name().as_ref() == b"p" => {
+			Ok(Event::Start(e)) if e.name().as_ref() == "p" => {
 				in_p = true;
 				current.clear();
 			}
-			Ok(Event::End(e)) if e.name().as_ref() == b"p" => {
+			Ok(Event::End(e)) if e.name().as_ref() == "p" => {
 				in_p = false;
 				let trimmed = current.trim().to_string();
 				if !trimmed.is_empty() {
@@ -268,7 +268,7 @@ fn extract_paragraphs_from_xhtml(xhtml: &str) -> Vec<String> {
 				}
 			}
 			Ok(Event::Text(e)) if in_p => {
-				current.push_str(&e.decode().unwrap_or_default());
+				current.push_str(&quick_xml::escape::unescape(&e).unwrap_or_default());
 			}
 			Ok(Event::Eof) => break,
 			Err(_) => break,
@@ -289,14 +289,14 @@ fn extract_title_from_xhtml(xhtml: &str) -> Option<String> {
 		match reader.read_event_into(&mut buf) {
 			Ok(Event::Start(e)) => {
 				let n = e.name();
-				if matches!(n.as_ref(), b"h1" | b"h2" | b"h3") {
+				if matches!(n.as_ref(), "h1" | "h2" | "h3") {
 					in_h = true;
 					title.clear();
 				}
 			}
 			Ok(Event::End(e)) => {
 				let n = e.name();
-				if matches!(n.as_ref(), b"h1" | b"h2" | b"h3") && in_h {
+				if matches!(n.as_ref(), "h1" | "h2" | "h3") && in_h {
 					let t = title.trim().to_string();
 					if !t.is_empty() {
 						return Some(t);
@@ -305,7 +305,7 @@ fn extract_title_from_xhtml(xhtml: &str) -> Option<String> {
 				}
 			}
 			Ok(Event::Text(e)) if in_h => {
-				title.push_str(&e.decode().unwrap_or_default());
+				title.push_str(&quick_xml::escape::unescape(&e).unwrap_or_default());
 			}
 			Ok(Event::Eof) => return None,
 			Err(_) => return None,
