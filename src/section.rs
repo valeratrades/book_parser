@@ -108,9 +108,13 @@ pub fn parse_range(s: &str) -> Result<PageRange> {
 		let end_raw = caps.get(3).map(|m| m.as_str().parse::<u32>()).transpose()?;
 		let until = match (inclusive, end_raw) {
 			(true, Some(n)) => Some(n),
-			(false, Some(0)) => bail!("empty range: {part}"),
+			(false, Some(0)) => {
+				bail!("empty range: {part}");
+			}
 			(false, Some(n)) => Some(n - 1),
-			(_, None) => bail!("open-ended ranges not supported in lists: {part}"),
+			(_, None) => {
+				bail!("open-ended ranges not supported in lists: {part}");
+			}
 		};
 		let since = since.ok_or_else(|| eyre!("open-ended ranges not supported in lists: {part}"))?;
 		let until = until.unwrap(); // guaranteed Some by above

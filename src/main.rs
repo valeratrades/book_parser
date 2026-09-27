@@ -116,6 +116,9 @@ enum FromCmd {
 		/// chapter and gets a `# title` heading.
 		#[arg(long)]
 		css_title: Option<String>,
+		/// Raw `Cookie` header sent with every request, e.g. `beget=begetok` for JS cookie walls
+		#[arg(long)]
+		cookie: Option<String>,
 		/// Parallel page downloads per chunk
 		#[arg(long, default_value_t = 16)]
 		parallel: usize,
@@ -181,10 +184,22 @@ async fn main() -> Result<()> {
 				url,
 				css_text,
 				css_title,
+				cookie,
 				parallel,
 				timeout,
 			} => {
-				load::run(&url, &css_text, css_title.as_deref(), parallel, timeout, cli.force, &cli.dir, cli.name.as_deref()).await?;
+				load::run(
+					&url,
+					&css_text,
+					css_title.as_deref(),
+					cookie.as_deref(),
+					parallel,
+					timeout,
+					cli.force,
+					&cli.dir,
+					cli.name.as_deref(),
+				)
+				.await?;
 			}
 		},
 		Cmd::Apply { stage } => {

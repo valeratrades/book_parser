@@ -13,12 +13,22 @@ use scraper::{Html, Selector};
 
 use crate::section::{book_root, decode_entities, enforce_contiguous, paragraphs_to_md};
 
-/// When a Cloudflare 503 is detected, parallelism is clamped down to this.
-const CF_FALLBACK_PARALLEL: usize = 4;
+/// When a 503 is observed, parallelism is clamped down to this.
+const THROTTLE_PARALLEL: usize = 4;
 /// ...and the inter-chunk wait is clamped up to (at least) this many seconds.
-const CF_FALLBACK_TIMEOUT_SECS: u64 = 1;
+const THROTTLE_TIMEOUT_SECS: u64 = 1;
 
-pub async fn run(url: &str, css_text: &[String], css_title: Option<&str>, parallel: usize, timeout: u64, force: bool, dir: &Path, name_override: Option<&str>) -> Result<()> {
+pub async fn run(
+	url: &str,
+	css_text: &[String],
+	css_title: Option<&str>,
+	cookie: Option<&str>,
+	parallel: usize,
+	timeout: u64,
+	force: bool,
+	dir: &Path,
+	name_override: Option<&str>,
+) -> Result<()> {
 	let (url_template, start, end) = parse_load_url(url)?;
 	let name = name_override.map(str::to_owned).unwrap_or_else(|| book_name_from_url(url));
 	fs::write(v_utils::xdg_cache_file!("last_book_name"), &name)?;
@@ -59,7 +69,7 @@ pub async fn run(url: &str, css_text: &[String], css_title: Option<&str>, parall
 		sections_dir.display()
 	);
 
-	let client = BookClient::try_new(parallel, timeout)?;
+	let client = BookClient::try_new(cookie, parallel, timeout)?;
 
 	let mut queue: VecDeque<u32> = pages_to_load.into();
 	let mut chunk_idx = 0u32;
@@ -207,8 +217,13 @@ struct BookClient {
 }
 
 impl BookClient {
-	fn try_new(parallel: usize, timeout_secs: u64) -> Result<Self> {
+	fn try_new(cookie: Option<&str>, parallel: usize, timeout_secs: u64) -> Result<Self> {
+		let mut headers = reqwest::header::HeaderMap::new();
+		if let Some(c) = cookie {
+			headers.insert(reqwest::header::COOKIE, c.parse()?);
+		}
 		let http = Client::builder()
+			.default_headers(headers)
 			.user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 			.build()?;
 		Ok(Self {
@@ -228,12 +243,12 @@ impl BookClient {
 		self.user_timeout_secs.max(self.force_min_timeout_secs.load(Ordering::Relaxed))
 	}
 
-	/// Called when we observe a 503 with `server: cloudflare`. Idempotent across concurrent calls.
-	fn trip_cloudflare_throttle(&self) {
-		let prev = self.force_max_parallel.swap(CF_FALLBACK_PARALLEL, Ordering::Relaxed);
-		if prev > CF_FALLBACK_PARALLEL {
-			self.force_min_timeout_secs.fetch_max(CF_FALLBACK_TIMEOUT_SECS, Ordering::Relaxed);
-			tracing::warn!("Cloudflare 503 detected; clamping parallel <= {CF_FALLBACK_PARALLEL}, timeout >= {CF_FALLBACK_TIMEOUT_SECS}s and re-queuing throttled pages");
+	/// Idempotent across concurrent calls.
+	fn trip_throttle(&self) {
+		let prev = self.force_max_parallel.swap(THROTTLE_PARALLEL, Ordering::Relaxed);
+		if prev > THROTTLE_PARALLEL {
+			self.force_min_timeout_secs.fetch_max(THROTTLE_TIMEOUT_SECS, Ordering::Relaxed);
+			tracing::warn!("503 detected; clamping parallel <= {THROTTLE_PARALLEL}, timeout >= {THROTTLE_TIMEOUT_SECS}s and re-queuing throttled pages");
 		}
 	}
 }
@@ -243,7 +258,7 @@ enum ScrapeOutcome {
 		paragraphs: Vec<String>,
 		title: Option<String>,
 	},
-	/// 503 from Cloudflare — caller should re-queue this page.
+	/// 503 — caller should re-queue this page.
 	Throttled,
 }
 
@@ -309,14 +324,8 @@ async fn load_page(client: &BookClient, url_template: &str, page: u32, css_text:
 async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[String], css_title: Option<&str>) -> Result<ScrapeOutcome> {
 	let response = client.http.get(url).send().await?;
 
-	if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
-		&& response
-			.headers()
-			.get(reqwest::header::SERVER)
-			.and_then(|v| v.to_str().ok())
-			.is_some_and(|s| s.eq_ignore_ascii_case("cloudflare"))
-	{
-		client.trip_cloudflare_throttle();
+	if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+		client.trip_throttle();
 		return Ok(ScrapeOutcome::Throttled);
 	}
 

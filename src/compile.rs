@@ -30,7 +30,9 @@ pub fn run(name: &str, format: &str, force: bool, dir: &Path, out_dir: &Path) ->
 	let out_ext = match format {
 		"epub" => "epub",
 		"md" | "markdown" => "md",
-		_ => bail!("unsupported format '{format}', expected epub or md"),
+		_ => {
+			bail!("unsupported format '{format}', expected epub or md");
+		}
 	};
 	let lang_suffix = language.as_ref().map(|l| format!(".{l}")).unwrap_or_default();
 	let out_path = out_dir.join(format!("{name}{range}{lang_suffix}.{out_ext}"));

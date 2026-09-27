@@ -1,12 +1,16 @@
 use std::{
-	collections::HashMap,
+	collections::{HashMap, HashSet},
 	fs,
 	io::{BufRead, BufReader, Read},
 	path::Path,
 };
 
 use color_eyre::eyre::{Result, bail, eyre};
-use quick_xml::{Reader, events::Event};
+use quick_xml::{
+	Reader,
+	escape::{resolve_html5_entity, unescape_with},
+	events::Event,
+};
 use regex::Regex;
 
 use crate::section::{book_root, paragraphs_to_md};
@@ -18,7 +22,9 @@ pub fn run(file: &Path, chapter_pattern: Option<&str>, dir: &Path, name_override
 	let ext = file.extension().and_then(|e| e.to_str()).ok_or_else(|| eyre!("input file has no extension"))?;
 	match ext {
 		"txt" | "fb2" | "epub" => {}
-		_ => bail!("unsupported extension '.{ext}', expected .txt, .fb2, or .epub"),
+		_ => {
+			bail!("unsupported extension '.{ext}', expected .txt, .fb2, or .epub");
+		}
 	}
 	let name = match name_override {
 		Some(n) => n.to_owned(),
@@ -63,6 +69,7 @@ fn parse_txt(input: &Path, chapter_re: &Regex, outdir: &Path) -> Result<u32> {
 	let mut current_lines: Vec<String> = Vec::new();
 	let mut current_num: Option<u32> = None;
 	let mut count = 0u32;
+	let mut seen = HashSet::new();
 
 	let flush = |num: u32, title: Option<&str>, lines: &[String], outdir: &Path| -> Result<()> {
 		let refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
@@ -81,6 +88,9 @@ fn parse_txt(input: &Path, chapter_re: &Regex, outdir: &Path) -> Result<u32> {
 				count += 1;
 			}
 			let num: u32 = line[m.start()..m.end()].parse().unwrap();
+			if !seen.insert(num) {
+				bail!("duplicate section number {num} at heading '{line}'");
+			}
 			current_num = Some(num);
 			current_title = Some(line.clone());
 			current_lines.clear();
@@ -113,6 +123,7 @@ fn parse_fb2(input: &Path, outdir: &Path) -> Result<u32> {
 	let mut paragraphs: Vec<String> = Vec::new();
 	let mut current_para = String::new();
 	let mut count = 0u32;
+	let mut seen = HashSet::new();
 
 	loop {
 		match reader.read_event_into(&mut buf) {
@@ -140,6 +151,9 @@ fn parse_fb2(input: &Path, outdir: &Path) -> Result<u32> {
 				} else if name.as_ref() == "section" {
 					if section_depth == 1 {
 						if let Some(num) = current_num {
+							if !seen.insert(num) {
+								bail!("duplicate section number {num} at title '{title_text}'");
+							}
 							let refs: Vec<&str> = paragraphs.iter().map(|s| s.as_str()).collect();
 							let title = if title_text.is_empty() { None } else { Some(title_text.as_str()) };
 							let md = paragraphs_to_md(title, &refs);
@@ -162,7 +176,7 @@ fn parse_fb2(input: &Path, outdir: &Path) -> Result<u32> {
 			}
 			Ok(Event::Text(e)) =>
 				if in_section {
-					let text = quick_xml::escape::unescape(&e).unwrap_or_default();
+					let text = unescape_with(&e, resolve_html5_entity)?;
 					if in_title {
 						title_text.push_str(&text);
 					} else if current_num.is_some() {
@@ -193,20 +207,17 @@ fn parse_epub(input: &Path, outdir: &Path) -> Result<u32> {
 	for href in &spine_hrefs {
 		let full_path = if opf_dir.is_empty() { href.clone() } else { format!("{opf_dir}/{href}") };
 
-		let mut entry = match archive.by_name(&full_path) {
-			Ok(e) => e,
-			Err(_) => continue,
-		};
+		let mut entry = archive.by_name(&full_path).map_err(|e| eyre!("spine entry '{full_path}' missing from archive: {e}"))?;
 		let mut content = String::new();
 		entry.read_to_string(&mut content)?;
 
-		let paras = extract_paragraphs_from_xhtml(&content);
+		let paras = extract_paragraphs_from_xhtml(&content)?;
 		if paras.is_empty() {
 			continue;
 		}
 
 		count += 1;
-		let title = extract_title_from_xhtml(&content);
+		let title = extract_title_from_xhtml(&content)?;
 		let refs: Vec<&str> = paras.iter().map(|s| s.as_str()).collect();
 		let md = paragraphs_to_md(title.as_deref(), &refs);
 		fs::write(outdir.join(format!("section_{count}.md")), md)?;
@@ -247,7 +258,7 @@ fn read_spine(archive: &mut zip::ZipArchive<BufReader<fs::File>>, opf_path: &str
 	Ok(hrefs)
 }
 
-fn extract_paragraphs_from_xhtml(xhtml: &str) -> Vec<String> {
+fn extract_paragraphs_from_xhtml(xhtml: &str) -> Result<Vec<String>> {
 	let mut reader = Reader::from_str(xhtml);
 	reader.config_mut().trim_text(true);
 	let mut buf = Vec::new();
@@ -268,18 +279,20 @@ fn extract_paragraphs_from_xhtml(xhtml: &str) -> Vec<String> {
 				}
 			}
 			Ok(Event::Text(e)) if in_p => {
-				current.push_str(&quick_xml::escape::unescape(&e).unwrap_or_default());
+				current.push_str(&unescape_with(&e, resolve_html5_entity)?);
 			}
 			Ok(Event::Eof) => break,
-			Err(_) => break,
+			Err(e) => {
+				bail!("XHTML parse error at {}: {e:?}", reader.buffer_position());
+			}
 			_ => {}
 		}
 		buf.clear();
 	}
-	paras
+	Ok(paras)
 }
 
-fn extract_title_from_xhtml(xhtml: &str) -> Option<String> {
+fn extract_title_from_xhtml(xhtml: &str) -> Result<Option<String>> {
 	let mut reader = Reader::from_str(xhtml);
 	reader.config_mut().trim_text(true);
 	let mut buf = Vec::new();
@@ -299,16 +312,18 @@ fn extract_title_from_xhtml(xhtml: &str) -> Option<String> {
 				if matches!(n.as_ref(), "h1" | "h2" | "h3") && in_h {
 					let t = title.trim().to_string();
 					if !t.is_empty() {
-						return Some(t);
+						return Ok(Some(t));
 					}
 					in_h = false;
 				}
 			}
 			Ok(Event::Text(e)) if in_h => {
-				title.push_str(&quick_xml::escape::unescape(&e).unwrap_or_default());
+				title.push_str(&unescape_with(&e, resolve_html5_entity)?);
 			}
-			Ok(Event::Eof) => return None,
-			Err(_) => return None,
+			Ok(Event::Eof) => return Ok(None),
+			Err(e) => {
+				bail!("XHTML parse error at {}: {e:?}", reader.buffer_position());
+			}
 			_ => {}
 		}
 		buf.clear();
