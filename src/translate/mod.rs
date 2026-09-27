@@ -6,7 +6,7 @@ use std::{
 use color_eyre::eyre::{Result, bail, eyre};
 use v_utils::io::{ConfirmResult, confirmation};
 
-use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language};
+use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, write_atomic};
 
 #[cfg(test)]
 mod tests;
@@ -223,7 +223,7 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 	let title = md_title(&md);
 	let lines: Vec<&str> = translated.lines().collect();
 	let out_md = paragraphs_to_md(title.as_deref(), &lines);
-	fs::write(out_dir.join(format!("section_{num}.md")), out_md)?;
+	write_atomic(&out_dir.join(format!("section_{num}.md")), &out_md)?;
 	println!("  section {num} translated");
 
 	Ok(())

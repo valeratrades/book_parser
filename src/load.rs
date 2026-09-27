@@ -11,7 +11,7 @@ use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
 
-use crate::section::{book_root, decode_entities, enforce_contiguous, paragraphs_to_md};
+use crate::section::{book_root, decode_entities, enforce_contiguous, paragraphs_to_md, write_atomic};
 
 /// When a 503 is observed, parallelism is clamped down to this.
 const THROTTLE_PARALLEL: usize = 4;
@@ -315,7 +315,7 @@ async fn load_page(client: &BookClient, url_template: &str, page: u32, css_text:
 	let decoded = decode_entities(&text);
 	let lines: Vec<&str> = decoded.lines().collect();
 	let md = paragraphs_to_md(None, &lines);
-	fs::write(out_path, md)?;
+	write_atomic(&out_path, &md)?;
 	println!("  page {page} ok");
 
 	Ok(PageOutcome::Saved { raw_title })

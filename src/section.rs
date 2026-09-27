@@ -156,6 +156,14 @@ pub fn book_root(base: &Path, name: &str) -> &'static PathBuf {
 	ROOT.get_or_init(|| base.join(name))
 }
 
+/// Section files are skipped on rerun once present, so a partially written one would be treated as done.
+pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+	let part = path.with_extension("md.part");
+	fs::write(&part, contents)?;
+	fs::rename(&part, path)?;
+	Ok(())
+}
+
 pub fn persist_language(root: &Path, language: &str) -> Result<()> {
 	fs::write(root.join(LANGUAGE_FILE), language)?;
 	Ok(())

@@ -3,7 +3,7 @@ use std::{fs, path::Path, process::Stdio};
 use color_eyre::eyre::{Result, bail};
 use tokio::process::Command;
 
-use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, shell_escape};
+use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, shell_escape, write_atomic};
 
 pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, max_jobs: usize, force: bool, dir: &Path) -> Result<()> {
 	let root = book_root(dir, name);
@@ -105,7 +105,7 @@ pub async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir
 	let title = md_title(&md);
 	let lines: Vec<&str> = translated.lines().collect();
 	let out_md = paragraphs_to_md(title.as_deref(), &lines);
-	fs::write(out_dir.join(format!("section_{num}.md")), out_md)?;
+	write_atomic(&out_dir.join(format!("section_{num}.md")), &out_md)?;
 	let _ = fs::remove_file(&tmp_out);
 	println!("  section {num} annotated");
 
