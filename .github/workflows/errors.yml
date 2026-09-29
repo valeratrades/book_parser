@@ -1,18 +1,19 @@
 env:
   CARGO_INCREMENTAL: '0'
   CARGO_NET_RETRY: '10'
+  RUSTC_WRAPPER: ''
   RUSTUP_MAX_RETRIES: '10'
   RUST_BACKTRACE: short
 jobs:
   pre_ci:
-    uses: valeratrades/.github/.github/workflows/pre_ci.yml@master
+    uses: valeratrades/.github/.github/workflows/pre_ci.yml@main
   rust-tests:
     if: needs.pre_ci.outputs.continue
     name: Rust ${{matrix.rust}}
     needs: pre_ci
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{matrix.rust}}
@@ -23,9 +24,16 @@ jobs:
       run: echo "RUSTFLAGS=-Dwarnings" >> $GITHUB_ENV
     - if: matrix.rust == 'nightly'
       name: Enable type layout randomization
-      run: echo RUSTFLAGS=${RUSTFLAGS}\ -Zrandomize-layout\ --cfg=exhaustive >> $GITHUB_ENV
+      run: 'printf ''#!/bin/sh\nexec "$@" -Zrandomize-layout --cfg=exhaustive\n''
+        > /tmp/randomize-layout.sh
+
+        chmod +x /tmp/randomize-layout.sh
+
+        echo RUSTC_WORKSPACE_WRAPPER=/tmp/randomize-layout.sh >> $GITHUB_ENV
+
+        '
     - name: Download modified by pre-ci Cargo.toml files
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         name: modified-cargo-files
     - run: cargo update
@@ -36,7 +44,7 @@ jobs:
       matrix:
         rust:
         - nightly
-        - nightly-2025-10-10
+        - nightly-2026-06-29
     timeout-minutes: 45
 name: Errors
 'on':

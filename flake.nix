@@ -37,9 +37,9 @@
             enable = true;
             lastSupportedVersion = "nightly-${v_flakes.rs.nightly_version}";
             jobs = {
-              errors.replace = [ "rust-tests" ];
-              warnings.replace = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
-              other.replace = [ "loc-badge" ];
+              errors.augment = [ "rust-tests" ];
+              warnings.augment = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
+              other.augment = [ "loc-badge" ];
             };
           };
           readme = v_flakes.readme-fw {
@@ -57,9 +57,10 @@
             zlib
           ];
 
+          build_rust = v_flakes.rs.build_nightly system;
           rustPlatform = pkgs.makeRustPlatform {
-            rustc = rust;
-            cargo = rust;
+            rustc = build_rust;
+            cargo = build_rust;
             inherit stdenv;
           };
         in

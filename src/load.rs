@@ -18,17 +18,40 @@ const THROTTLE_PARALLEL: usize = 4;
 /// ...and the inter-chunk wait is clamped up to (at least) this many seconds.
 const THROTTLE_TIMEOUT_SECS: u64 = 1;
 
-pub async fn run(
-	url: &str,
-	css_text: &[String],
-	css_title: Option<&str>,
-	cookie: Option<&str>,
+#[derive(clap::Args)]
+pub struct Args {
+	/// URL whose trailing `N..M` or `N..=M` is replaced by each page number.
+	/// E.g. `https://example.com/b/123/chapter/1..=50/` expands to `.../chapter/1/`..`.../chapter/50/`.
+	url: String,
+	/// CSS selectors for content extraction (can be repeated)
+	#[arg(long, required = true)]
+	css_text: Vec<String>,
+	/// Optional CSS selector for the chapter-title element. If a page's title differs from
+	/// the previous kept title by more than 25% (Levenshtein ratio), that page starts a new
+	/// chapter and gets a `# title` heading.
+	#[arg(long)]
+	css_title: Option<String>,
+	/// Raw `Cookie` header sent with every request, e.g. `beget=begetok` for JS cookie walls
+	#[arg(long)]
+	cookie: Option<String>,
+	/// Parallel page downloads per chunk
+	#[arg(long, default_value_t = 16)]
 	parallel: usize,
+	/// Seconds to wait between chunks
+	#[arg(long, default_value_t = 0)]
 	timeout: u64,
-	force: bool,
-	dir: &Path,
-	name_override: Option<&str>,
-) -> Result<()> {
+}
+
+pub async fn run(args: Args, force: bool, dir: &Path, name_override: Option<&str>) -> Result<()> {
+	let Args {
+		url,
+		css_text,
+		css_title,
+		cookie,
+		parallel,
+		timeout,
+	} = args;
+	let (url, css_text, css_title, cookie) = (url.as_str(), css_text.as_slice(), css_title.as_deref(), cookie.as_deref());
 	let (url_template, start, end) = parse_load_url(url)?;
 	let name = name_override.map(str::to_owned).unwrap_or_else(|| book_name_from_url(url));
 	fs::write(v_utils::xdg_cache_file!("last_book_name"), &name)?;
@@ -182,28 +205,6 @@ fn title_diff_ratio(a: &str, b: &str) -> f64 {
 		std::mem::swap(&mut prev, &mut curr);
 	}
 	prev[n] as f64 / m.max(n) as f64
-}
-
-#[cfg(test)]
-mod tests {
-	use super::title_diff_ratio;
-
-	#[test]
-	fn identical_titles_are_continuation() {
-		let r = title_diff_ratio("Chapter 232 - 232: Before the Storm", "Chapter 232 - 232: Before the Storm");
-		assert!(r <= 0.25, "expected continuation, got ratio {r}");
-	}
-
-	#[test]
-	fn different_chapters_cross_threshold() {
-		let r = title_diff_ratio("Chapter 232 - 232: Before the Storm", "Chapter 233 - 233: After the Battle");
-		assert!(r > 0.25, "expected new chapter, got ratio {r}");
-	}
-
-	#[test]
-	fn empty_inputs() {
-		assert_eq!(title_diff_ratio("", ""), 0.0);
-	}
 }
 
 struct BookClient {
@@ -412,4 +413,26 @@ async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[Str
 	};
 
 	Ok(ScrapeOutcome::Blocks { paragraphs: content_blocks, title })
+}
+
+#[cfg(test)]
+mod tests {
+	use super::title_diff_ratio;
+
+	#[test]
+	fn identical_titles_are_continuation() {
+		let r = title_diff_ratio("Chapter 232 - 232: Before the Storm", "Chapter 232 - 232: Before the Storm");
+		assert!(r <= 0.25, "expected continuation, got ratio {r}");
+	}
+
+	#[test]
+	fn different_chapters_cross_threshold() {
+		let r = title_diff_ratio("Chapter 232 - 232: Before the Storm", "Chapter 233 - 233: After the Battle");
+		assert!(r > 0.25, "expected new chapter, got ratio {r}");
+	}
+
+	#[test]
+	fn empty_inputs() {
+		assert_eq!(title_diff_ratio("", ""), 0.0);
+	}
 }

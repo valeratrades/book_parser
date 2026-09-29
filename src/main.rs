@@ -104,28 +104,7 @@ enum FromCmd {
 	///   # also extract a chapter title; new-chapter detection by Levenshtein ratio
 	///   book_parser from load 'https://site.com/novel/foo/chapter/1..=500/' \
 	///     --css-text '#chapter-container' --css-title 'h1.chapter-title'
-	Load {
-		/// URL whose trailing `N..M` or `N..=M` is replaced by each page number.
-		/// E.g. `https://example.com/b/123/chapter/1..=50/` expands to `.../chapter/1/`..`.../chapter/50/`.
-		url: String,
-		/// CSS selectors for content extraction (can be repeated)
-		#[arg(long, required = true)]
-		css_text: Vec<String>,
-		/// Optional CSS selector for the chapter-title element. If a page's title differs from
-		/// the previous kept title by more than 25% (Levenshtein ratio), that page starts a new
-		/// chapter and gets a `# title` heading.
-		#[arg(long)]
-		css_title: Option<String>,
-		/// Raw `Cookie` header sent with every request, e.g. `beget=begetok` for JS cookie walls
-		#[arg(long)]
-		cookie: Option<String>,
-		/// Parallel page downloads per chunk
-		#[arg(long, default_value_t = 16)]
-		parallel: usize,
-		/// Seconds to wait between chunks
-		#[arg(long, default_value_t = 0)]
-		timeout: u64,
-	},
+	Load(load::Args),
 }
 #[derive(Subcommand)]
 enum ApplyCmd {
@@ -180,26 +159,8 @@ async fn main() -> Result<()> {
 			FromCmd::Parse { file, chapter_pattern } => {
 				parse::run(&file, chapter_pattern.as_deref(), &cli.dir, cli.name.as_deref())?;
 			}
-			FromCmd::Load {
-				url,
-				css_text,
-				css_title,
-				cookie,
-				parallel,
-				timeout,
-			} => {
-				load::run(
-					&url,
-					&css_text,
-					css_title.as_deref(),
-					cookie.as_deref(),
-					parallel,
-					timeout,
-					cli.force,
-					&cli.dir,
-					cli.name.as_deref(),
-				)
-				.await?;
+			FromCmd::Load(args) => {
+				load::run(args, cli.force, &cli.dir, cli.name.as_deref()).await?;
 			}
 		},
 		Cmd::Apply { stage } => {
