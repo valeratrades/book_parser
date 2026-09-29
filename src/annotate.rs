@@ -93,12 +93,14 @@ pub async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir
 		tmp_in.display(),
 		tmp_out.display()
 	);
-	let status = Command::new("sh").arg("-c").arg(cmd).stdout(Stdio::null()).stderr(Stdio::null()).status().await?;
+	let out = Command::new("sh").arg("-c").arg(cmd).stdout(Stdio::null()).stderr(Stdio::piped()).output().await?;
 	let _ = fs::remove_file(&tmp_in);
 
-	if !status.success() {
+	if !out.status.success() {
 		fs::write(fail_dir.join(format!("section_{num}.fail")), format!("annotate\nlanguage={language}\nwlimit={wlimit}\n"))?;
-		bail!("translate_infrequent failed for section {num}");
+		let stderr = String::from_utf8_lossy(&out.stderr);
+		let tail: Vec<&str> = stderr.lines().filter(|l| !l.contains(" - DEBUG - ")).collect(); // its DEBUG log is per-word noise
+		bail!("translate_infrequent failed for section {num}:\n{}", tail[tail.len().saturating_sub(15)..].join("\n"));
 	}
 
 	let translated = fs::read_to_string(&tmp_out)?;
