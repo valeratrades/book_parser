@@ -1,9 +1,11 @@
 use std::{
 	fs,
 	path::{Path, PathBuf},
+	sync::Mutex,
 };
 
 use color_eyre::eyre::{Result, bail, eyre};
+use indicatif::{ProgressBar, ProgressStyle};
 use v_utils::io::{ConfirmResult, confirmation};
 
 use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, write_atomic};
@@ -107,6 +109,7 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 	// Very generous ceiling: even if every output char maps to 1 token (worst case), this is still well above any real translation.
 	let max_output_tokens = CHUNK_LIMIT * MAX_EXPANSION as usize;
 	let mut total_failed = 0u32;
+	let progress = Progress::default();
 
 	// main pass
 	{
@@ -126,12 +129,13 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 			skipped,
 			to_translate.len(),
 		);
+		progress.bar.inc_length(to_translate.len() as u64);
 		for chunk in to_translate.chunks(max_jobs) {
 			let futs: Vec<_> = chunk
 				.iter()
-				.map(|(num, path)| translate_section(path, *num, language, max_output_tokens, &translated_dir, &fail_dir))
+				.map(|(num, path)| translate_section(path, *num, language, max_output_tokens, &translated_dir, &fail_dir, &progress))
 				.collect();
-			total_failed += run_batch(futs).await;
+			total_failed += run_batch(futs, &progress.bar).await;
 		}
 	}
 
@@ -147,22 +151,38 @@ pub async fn run(name: &str, language: &str, range: Option<&str>, max_jobs: usiz
 			let _ = fs::remove_file(&fail.path);
 			to_retry.push((fail.num, sections_dir.join(format!("section_{}.md", fail.num))));
 		}
+		progress.bar.inc_length(to_retry.len() as u64);
 		for chunk in to_retry.chunks(max_jobs) {
 			let futs: Vec<_> = chunk
 				.iter()
-				.map(|(num, path)| translate_section(path, *num, language, max_output_tokens, &translated_dir, &fail_dir))
+				.map(|(num, path)| translate_section(path, *num, language, max_output_tokens, &translated_dir, &fail_dir, &progress))
 				.collect();
-			total_failed += run_batch(futs).await;
+			total_failed += run_batch(futs, &progress.bar).await;
 		}
 	}
 
+	progress.bar.finish();
 	if total_failed > 0 {
 		bail!("{total_failed} sections failed to translate (see .fail files). Re-run to retry.");
 	}
 	println!("translation done");
 	Ok(())
 }
-pub async fn translate_section(section: &Path, num: u32, language: &str, max_output_tokens: usize, out_dir: &Path, fail_dir: &Path) -> Result<()> {
+pub struct Progress {
+	pub bar: ProgressBar,
+	spent_cents: Mutex<f32>,
+}
+
+impl Default for Progress {
+	fn default() -> Self {
+		let bar = ProgressBar::new(0);
+		bar.set_style(ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} sections  elapsed {elapsed_precise}  eta {eta_precise}  {msg}").expect("static template"));
+		bar.set_message("0.00¢");
+		Self { bar, spent_cents: Mutex::new(0.) }
+	}
+}
+
+pub async fn translate_section(section: &Path, num: u32, language: &str, max_output_tokens: usize, out_dir: &Path, fail_dir: &Path, progress: &Progress) -> Result<()> {
 	let md = fs::read_to_string(section)?;
 	let plaintext = md_to_plaintext(&md);
 	let chunks = chunk_plaintext(&plaintext);
@@ -189,6 +209,11 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 				}
 			};
 			tracing::info!("section {num} chunk {}/{n_chunks} cost (cents): {}", i + 1, answer.cost_cents);
+			{
+				let mut spent = progress.spent_cents.lock().expect("no panics while held");
+				*spent += answer.cost_cents;
+				progress.bar.set_message(format!("{:.2}¢", *spent));
+			}
 
 			let part = match answer.extract_codeblock(None) {
 				Ok(cb) => cb,
@@ -224,7 +249,6 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 	let lines: Vec<&str> = translated.lines().collect();
 	let out_md = paragraphs_to_md(title.as_deref(), &lines);
 	write_atomic(&out_dir.join(format!("section_{num}.md")), &out_md)?;
-	println!("  section {num} translated");
 
 	Ok(())
 }
@@ -239,12 +263,13 @@ async fn ollama_reachable() -> bool {
 
 /// Run a batch of futures, recording failures instead of aborting.
 /// Returns the count of failures in this batch.
-async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>) -> u32 {
+async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>, bar: &ProgressBar) -> u32 {
 	let results = futures::future::join_all(futs).await;
 	let mut failed = 0u32;
 	for r in results {
+		bar.inc(1);
 		if let Err(e) = r {
-			eprintln!("  {e}");
+			bar.println(format!("  {e}"));
 			failed += 1;
 		}
 	}

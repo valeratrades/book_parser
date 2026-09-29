@@ -63,13 +63,17 @@ pub async fn run(name: &str, max_jobs: usize, force: bool, yes: bool, dir: &Path
 			})
 			.collect();
 
+		let progress = translate::Progress::default();
+		progress.bar.inc_length(items.len() as u64);
 		for chunk in items.chunks(max_jobs) {
 			let futs: Vec<_> = chunk
 				.iter()
-				.map(|(num, path, language)| translate::translate_section(path, *num, language, max_output_tokens, &translated_dir, &translate_fail_dir))
+				.map(|(num, path, language)| translate::translate_section(path, *num, language, max_output_tokens, &translated_dir, &translate_fail_dir, &progress))
 				.collect();
 			run_batch(futs).await;
+			progress.bar.inc(chunk.len() as u64);
 		}
+		progress.bar.finish();
 	}
 
 	// Process annotate failures
@@ -98,8 +102,8 @@ pub async fn run(name: &str, max_jobs: usize, force: bool, yes: bool, dir: &Path
 	}
 
 	// Report any newly-created .fail files
-	let remaining_translate = glob_fails(&translate_fail_dir).map(|v| v.len()).unwrap_or(0);
-	let remaining_annotate = glob_fails(&annotate_fail_dir).map(|v| v.len()).unwrap_or(0);
+	let remaining_translate = glob_fails(&translate_fail_dir)?.len();
+	let remaining_annotate = glob_fails(&annotate_fail_dir)?.len();
 	let remaining = remaining_translate + remaining_annotate;
 	if remaining > 0 {
 		bail!("{remaining} sections still failing after retry (see .fail files)");
