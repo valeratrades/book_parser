@@ -44,6 +44,9 @@ tabs_in_doc_comments = "allow"
 get_first = "allow"
 get_last_with_len = "allow"
 
+[lints.cargo]
+non_kebab_case_bins = "allow"
+
 [[example]]
 name = "test"
 path = "./examples/test.rs"
