@@ -53,3 +53,16 @@ fn max_expansion_allows_normal_translation() {
 	let ratio = output_len as f32 / input_len as f32;
 	assert!(ratio < MAX_EXPANSION, "2× expansion should be within MAX_EXPANSION ({MAX_EXPANSION})");
 }
+
+#[test]
+fn echo_guard_rejects_echoed_chunk() {
+	let input = "Петля затянулась на шее старого охотника, и он понял, что выхода больше нет.\nВетер гнал облака над замёрзшей рекой.";
+	assert!(is_echo(input, input));
+}
+
+#[test]
+fn echo_guard_accepts_real_translation() {
+	let input = "Marcus walked through the burning village, holding Elena's hand.\nNobody in Westbrook remembered such a winter.";
+	let output = "Marcus ging durch das brennende Dorf und hielt Elenas Hand.\nNiemand in Westbrook erinnerte sich an einen solchen Winter.";
+	assert!(!is_echo(input, output));
+}

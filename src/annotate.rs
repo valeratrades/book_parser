@@ -5,7 +5,25 @@ use tokio::process::Command;
 
 use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, shell_escape, write_atomic};
 
-pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, max_jobs: usize, force: bool, dir: &Path) -> Result<()> {
+#[derive(clap::Args)]
+pub struct Args {
+	/// Target language
+	#[arg(short, long)]
+	language: String,
+	/// Word frequency limit
+	#[arg(short, long)]
+	wlimit: String,
+	/// Section range
+	#[arg(short, long)]
+	range: Option<String>,
+	/// Append IPA to each gloss: `word {translation [ipa]}`
+	#[arg(short, long)]
+	phonetic: bool,
+}
+
+pub async fn run(name: &str, args: Args, max_jobs: usize, force: bool, dir: &Path) -> Result<()> {
+	let Args { language, wlimit, range, phonetic } = args;
+	let (language, wlimit, range) = (language.as_str(), wlimit.as_str(), range.as_deref());
 	let root = book_root(dir, name);
 	let source_dir = root.join(Stage::Translated.dir_name());
 	let annotated_dir = root.join(Stage::Annotated.dir_name());
@@ -49,7 +67,10 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 			to_annotate.len(),
 		);
 		for chunk in to_annotate.chunks(max_jobs) {
-			let futs: Vec<_> = chunk.iter().map(|&num| annotate_section(num, language, wlimit, &source_dir, &annotated_dir, &fail_dir)).collect();
+			let futs: Vec<_> = chunk
+				.iter()
+				.map(|&num| annotate_section(num, language, wlimit, phonetic, &source_dir, &annotated_dir, &fail_dir))
+				.collect();
 			total_failed += run_batch(futs).await;
 		}
 	}
@@ -67,7 +88,10 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 			to_retry.push(fail.num);
 		}
 		for chunk in to_retry.chunks(max_jobs) {
-			let futs: Vec<_> = chunk.iter().map(|&num| annotate_section(num, language, wlimit, &source_dir, &annotated_dir, &fail_dir)).collect();
+			let futs: Vec<_> = chunk
+				.iter()
+				.map(|&num| annotate_section(num, language, wlimit, phonetic, &source_dir, &annotated_dir, &fail_dir))
+				.collect();
 			total_failed += run_batch(futs).await;
 		}
 	}
@@ -78,7 +102,7 @@ pub async fn run(name: &str, language: &str, wlimit: &str, range: Option<&str>, 
 	println!("annotation done");
 	Ok(())
 }
-pub async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir: &Path, out_dir: &Path, fail_dir: &Path) -> Result<()> {
+pub async fn annotate_section(num: u32, language: &str, wlimit: &str, phonetic: bool, source_dir: &Path, out_dir: &Path, fail_dir: &Path) -> Result<()> {
 	let source_md_path = source_dir.join(format!("section_{num}.md"));
 	let md = fs::read_to_string(&source_md_path)?;
 	let plaintext = md_to_plaintext(&md);
@@ -87,9 +111,10 @@ pub async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir
 
 	let tmp_out = out_dir.join(format!("section_{num}.txt"));
 	let cmd = format!(
-		"translate_infrequent -l {} -w {} < '{}' > '{}'",
+		"translate_infrequent -l {} -w {}{} < '{}' > '{}'",
 		shell_escape(language),
 		shell_escape(wlimit),
+		if phonetic { " --phonetic" } else { "" },
 		tmp_in.display(),
 		tmp_out.display()
 	);
@@ -97,7 +122,10 @@ pub async fn annotate_section(num: u32, language: &str, wlimit: &str, source_dir
 	let _ = fs::remove_file(&tmp_in);
 
 	if !out.status.success() {
-		fs::write(fail_dir.join(format!("section_{num}.fail")), format!("annotate\nlanguage={language}\nwlimit={wlimit}\n"))?;
+		fs::write(
+			fail_dir.join(format!("section_{num}.fail")),
+			format!("annotate\nlanguage={language}\nwlimit={wlimit}\nphonetic={phonetic}\n"),
+		)?;
 		let stderr = String::from_utf8_lossy(&out.stderr);
 		let tail: Vec<&str> = stderr.lines().filter(|l| !l.contains(" - DEBUG - ")).collect(); // its DEBUG log is per-word noise
 		bail!("translate_infrequent failed for section {num}:\n{}", tail[tail.len().saturating_sub(15)..].join("\n"));

@@ -1,4 +1,5 @@
 use std::{
+	collections::HashSet,
 	fs,
 	path::{Path, PathBuf},
 	sync::Mutex,
@@ -16,6 +17,9 @@ mod tests;
 pub const CHUNK_LIMIT: usize = 5000;
 /// If a translated chunk is longer than this multiple of its input, the model degenerated (repetition loop).
 pub const MAX_EXPANSION: f32 = 3.0;
+/// Above this share of output words (>= 4 chars) also found in the input, the model echoed the chunk back.
+/// A real translation shares little more than names.
+const MAX_ECHO_SHARE: f32 = 0.5;
 const OLLAMA_BASE: &str = "http://localhost:11434";
 const OLLAMA_MODEL: &str = "translategemma:4b";
 
@@ -234,6 +238,12 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 				continue;
 			}
 
+			if is_echo(chunk, &part) {
+				last_err = Some(format!("section {num} chunk {i}: output is mostly the input's own words — model echoed the source"));
+				tracing::warn!("section {num} chunk {i} attempt {attempt}: echoed source, retrying");
+				continue;
+			}
+
 			last_err = None;
 			translated_parts.push(part);
 			break;
@@ -252,6 +262,19 @@ pub async fn translate_section(section: &Path, num: u32, language: &str, max_out
 
 	Ok(())
 }
+fn is_echo(input: &str, output: &str) -> bool {
+	let words = |s: &str| {
+		s.split(|c: char| !c.is_alphanumeric())
+			.filter(|w| w.chars().count() >= 4)
+			.map(str::to_lowercase)
+			.collect::<Vec<_>>()
+	};
+	let input: HashSet<String> = words(input).into_iter().collect();
+	let out = words(output);
+	let shared = out.iter().filter(|w| input.contains(*w)).count();
+	!out.is_empty() && shared as f32 / out.len() as f32 > MAX_ECHO_SHARE
+}
+
 async fn ollama_reachable() -> bool {
 	reqwest::Client::new()
 		.get(format!("{OLLAMA_BASE}/api/tags"))

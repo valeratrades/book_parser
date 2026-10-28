@@ -11,12 +11,16 @@ use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
 
-use crate::section::{book_root, decode_entities, enforce_contiguous, paragraphs_to_md, write_atomic};
+use crate::section::{Stage, book_root, decode_entities, enforce_contiguous, paragraphs_to_md, persist_language, write_atomic};
+
+mod browser;
 
 /// When a 503 is observed, parallelism is clamped down to this.
 const THROTTLE_PARALLEL: usize = 4;
 /// ...and the inter-chunk wait is clamped up to (at least) this many seconds.
 const THROTTLE_TIMEOUT_SECS: u64 = 1;
+/// Elements inside the content container that become blocks of the section.
+const CONTENT_BLOCKS: &str = "h1, h2, h3, h4, h5, h6, p, div.subtitle";
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -34,7 +38,11 @@ pub struct Args {
 	/// Raw `Cookie` header sent with every request, e.g. `beget=begetok` for JS cookie walls
 	#[arg(long)]
 	cookie: Option<String>,
-	/// Parallel page downloads per chunk
+	/// Load pages through headless Chrome and translate them there into this language (BCP-47, e.g. `de`),
+	/// writing straight to the translated stage. Source language is the page's `<html lang>`.
+	#[arg(long, conflicts_with = "cookie")]
+	browser_translate: Option<String>,
+	/// Parallel page downloads (or browser tabs) per chunk
 	#[arg(long, default_value_t = 16)]
 	parallel: usize,
 	/// Seconds to wait between chunks
@@ -50,14 +58,19 @@ pub async fn run(args: Args, force: bool, dir: &Path, name_override: Option<&str
 		cookie,
 		parallel,
 		timeout,
+		browser_translate,
 	} = args;
 	let (url, css_text, css_title, cookie) = (url.as_str(), css_text.as_slice(), css_title.as_deref(), cookie.as_deref());
 	let (url_template, start, end) = parse_load_url(url)?;
 	let name = name_override.map(str::to_owned).unwrap_or_else(|| book_name_from_url(url));
 	fs::write(v_utils::xdg_cache_file!("last_book_name"), &name)?;
 	let root = book_root(dir, &name);
-	let sections_dir = root.join("sections");
+	let stage = if browser_translate.is_some() { Stage::Translated } else { Stage::Raw };
+	let sections_dir = root.join(stage.dir_name());
 	fs::create_dir_all(&sections_dir)?;
+	if let Some(lang) = &browser_translate {
+		persist_language(root, lang)?;
+	}
 
 	if force {
 		println!("--force: will overwrite existing pages");
@@ -93,43 +106,18 @@ pub async fn run(args: Args, force: bool, dir: &Path, name_override: Option<&str
 	);
 
 	let client = BookClient::try_new(cookie, parallel, timeout)?;
-
-	let mut queue: VecDeque<u32> = pages_to_load.into();
-	let mut chunk_idx = 0u32;
-	let mut raw_titles: BTreeMap<u32, String> = BTreeMap::new();
-	while !queue.is_empty() {
-		let par = client.effective_parallel();
-		let to_secs = client.effective_timeout_secs();
-		if chunk_idx > 0 && to_secs > 0 {
-			println!("  waiting {to_secs}s between chunks...");
-			tokio::time::sleep(std::time::Duration::from_secs(to_secs)).await;
+	let queue: VecDeque<u32> = pages_to_load.into();
+	let loaded = match &browser_translate {
+		None => load_pages(&client, None, &url_template, css_text, css_title, &sections_dir, queue).await,
+		Some(lang) => browser::Session::run(lang, async |s| load_pages(&client, Some(s), &url_template, css_text, css_title, &sections_dir, queue).await).await,
+	};
+	let raw_titles = match loaded {
+		Ok(t) => t,
+		Err(e) => {
+			enforce_contiguous(&sections_dir, start, end);
+			return Err(e);
 		}
-
-		let take = par.min(queue.len());
-		let chunk: Vec<u32> = queue.drain(..take).collect();
-		let futs = chunk.iter().map(|&p| load_page(&client, &url_template, p, css_text, css_title, &sections_dir));
-		let results = join_all(futs).await;
-
-		let mut requeue = Vec::new();
-		for (page, res) in chunk.iter().zip(results) {
-			match res {
-				Ok(PageOutcome::Saved { raw_title }) =>
-					if let Some(t) = raw_title {
-						raw_titles.insert(*page, t);
-					},
-				Ok(PageOutcome::Throttled) => requeue.push(*page),
-				Err(e) => {
-					enforce_contiguous(&sections_dir, start, end);
-					return Err(e);
-				}
-			}
-		}
-		// retry throttled pages first, preserving their original order
-		for p in requeue.into_iter().rev() {
-			queue.push_front(p);
-		}
-		chunk_idx += 1;
-	}
+	};
 
 	if let Some(gap) = enforce_contiguous(&sections_dir, start, end) {
 		let loaded = gap - start;
@@ -145,6 +133,50 @@ pub async fn run(args: Args, force: bool, dir: &Path, name_override: Option<&str
 	println!("loaded all {} pages ({start}..={end})", end - start + 1);
 	println!("book name: {name}");
 	Ok(())
+}
+
+/// Returns the raw titles of the pages it saved.
+async fn load_pages(
+	client: &BookClient,
+	browser: Option<&browser::Session>,
+	url_template: &str,
+	css_text: &[String],
+	css_title: Option<&str>,
+	outdir: &Path,
+	mut queue: VecDeque<u32>,
+) -> Result<BTreeMap<u32, String>> {
+	let mut chunk_idx = 0u32;
+	let mut raw_titles: BTreeMap<u32, String> = BTreeMap::new();
+	while !queue.is_empty() {
+		let par = client.effective_parallel();
+		let to_secs = client.effective_timeout_secs();
+		if chunk_idx > 0 && to_secs > 0 {
+			println!("  waiting {to_secs}s between chunks...");
+			tokio::time::sleep(std::time::Duration::from_secs(to_secs)).await;
+		}
+
+		let take = par.min(queue.len());
+		let chunk: Vec<u32> = queue.drain(..take).collect();
+		let futs = chunk.iter().map(|&p| load_page(client, browser, url_template, p, css_text, css_title, outdir));
+		let results = join_all(futs).await;
+
+		let mut requeue = Vec::new();
+		for (page, res) in chunk.iter().zip(results) {
+			match res? {
+				PageOutcome::Saved { raw_title } =>
+					if let Some(t) = raw_title {
+						raw_titles.insert(*page, t);
+					},
+				PageOutcome::Throttled => requeue.push(*page),
+			}
+		}
+		// retry throttled pages first, preserving their original order
+		for p in requeue.into_iter().rev() {
+			queue.push_front(p);
+		}
+		chunk_idx += 1;
+	}
+	Ok(raw_titles)
 }
 
 /// Walk sections in order. For each page whose raw title was just scraped, decide whether
@@ -166,7 +198,7 @@ fn mark_chapters(dir: &Path, start: u32, end: u32, raw_titles: &BTreeMap<u32, St
 			}
 			continue;
 		};
-		assert!(!raw.is_empty(), "scrape_page rejects empty titles");
+		assert!(!raw.is_empty(), "extract rejects empty titles");
 		let new_chapter = match &last_chapter_title {
 			None => true,
 			Some(prev) => title_diff_ratio(prev, raw) > 0.25,
@@ -254,15 +286,6 @@ impl BookClient {
 	}
 }
 
-enum ScrapeOutcome {
-	Blocks {
-		paragraphs: Vec<String>,
-		title: Option<String>,
-	},
-	/// 503 — caller should re-queue this page.
-	Throttled,
-}
-
 enum PageOutcome {
 	Saved { raw_title: Option<String> },
 	Throttled,
@@ -301,17 +324,29 @@ fn book_name_from_url(url: &str) -> String {
 	parts.join("_")
 }
 
-async fn load_page(client: &BookClient, url_template: &str, page: u32, css_text: &[String], css_title: Option<&str>, outdir: &Path) -> Result<PageOutcome> {
+async fn load_page(
+	client: &BookClient,
+	browser: Option<&browser::Session>,
+	url_template: &str,
+	page: u32,
+	css_text: &[String],
+	css_title: Option<&str>,
+	outdir: &Path,
+) -> Result<PageOutcome> {
 	let url = url_template.replace("{}", &page.to_string());
 	let out_path = outdir.join(format!("section_{page}.md"));
 
-	let (content_blocks, raw_title) = match scrape_page(client, &url, css_text, css_title).await? {
-		ScrapeOutcome::Blocks { paragraphs, title } => (paragraphs, title),
-		ScrapeOutcome::Throttled => {
-			tracing::debug!("page {page} throttled, will retry");
-			return Ok(PageOutcome::Throttled);
-		}
+	let html = match browser {
+		Some(b) => b.fetch_translated(&url, css_text, css_title).await?,
+		None => match fetch_http(client, &url).await? {
+			Some(html) => html,
+			None => {
+				tracing::debug!("page {page} throttled, will retry");
+				return Ok(PageOutcome::Throttled);
+			}
+		},
 	};
+	let (content_blocks, raw_title) = extract(&html, css_text, css_title)?;
 	let text = content_blocks.join("\n\n");
 	let decoded = decode_entities(&text);
 	let lines: Vec<&str> = decoded.lines().collect();
@@ -322,20 +357,25 @@ async fn load_page(client: &BookClient, url_template: &str, page: u32, css_text:
 	Ok(PageOutcome::Saved { raw_title })
 }
 
-async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[String], css_title: Option<&str>) -> Result<ScrapeOutcome> {
+/// `None`: 503, re-queue the page.
+async fn fetch_http(client: &BookClient, url: &str) -> Result<Option<String>> {
 	let response = client.http.get(url).send().await?;
 
 	if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
 		client.trip_throttle();
-		return Ok(ScrapeOutcome::Throttled);
+		return Ok(None);
 	}
 
 	if !response.status().is_success() {
 		bail!("Failed to retrieve page. Status code: {}", response.status());
 	}
 
-	let html_content = response.text().await?;
-	let document = Html::parse_document(&html_content);
+	Ok(Some(response.text().await?))
+}
+
+/// Content blocks and the raw chapter title of a page.
+fn extract(html: &str, css_selector_strings: &[String], css_title: Option<&str>) -> Result<(Vec<String>, Option<String>)> {
+	let document = Html::parse_document(html);
 
 	let mut css_selectors = Vec::with_capacity(css_selector_strings.len());
 	for s in css_selector_strings.iter() {
@@ -344,25 +384,14 @@ async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[Str
 	}
 
 	assert!(!css_selectors.is_empty(), "clap enforces required = true");
-	let container = {
-		let mut i = 0;
-		loop {
-			match document.select(&css_selectors[i]).next() {
-				Some(container) => {
-					tracing::info!("Got a match on css selector: {}", css_selector_strings[i]);
-					break container;
-				}
-				None => {
-					i += 1;
-					if i >= css_selectors.len() {
-						bail!("No matching container found for any of the provided CSS selectors");
-					}
-				}
-			}
-		}
-	};
+	let (container, matched) = css_selectors
+		.iter()
+		.zip(css_selector_strings)
+		.find_map(|(sel, s)| document.select(sel).next().map(|c| (c, s)))
+		.ok_or_else(|| eyre!("No matching container found for any of the provided CSS selectors"))?;
+	tracing::info!("Got a match on css selector: {matched}");
 
-	let content_selector = Selector::parse("h1, h2, h3, h4, h5, h6, p, div.subtitle").map_err(|e| eyre!("Internal error: Invalid content block selector: {e}"))?;
+	let content_selector = Selector::parse(CONTENT_BLOCKS).expect("static selector");
 
 	let mut content_blocks = Vec::new();
 
@@ -412,7 +441,7 @@ async fn scrape_page(client: &BookClient, url: &str, css_selector_strings: &[Str
 		None => None,
 	};
 
-	Ok(ScrapeOutcome::Blocks { paragraphs: content_blocks, title })
+	Ok((content_blocks, title))
 }
 
 #[cfg(test)]

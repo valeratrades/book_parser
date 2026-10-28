@@ -118,17 +118,7 @@ enum ApplyCmd {
 		range: Option<String>,
 	},
 	/// Annotate infrequent words (via translate_infrequent)
-	Annotate {
-		/// Target language
-		#[arg(short, long)]
-		language: String,
-		/// Word frequency limit
-		#[arg(short, long)]
-		wlimit: String,
-		/// Section range
-		#[arg(short, long)]
-		range: Option<String>,
-	},
+	Annotate(annotate::Args),
 	/// Retry all failed sections (reads settings from .fail files)
 	Retry,
 }
@@ -169,8 +159,8 @@ async fn main() -> Result<()> {
 				ApplyCmd::Translate { language, range } => {
 					translate::run(&name, &language, range.as_deref(), cli.max_jobs, cli.force, cli.yes, &cli.dir).await?;
 				}
-				ApplyCmd::Annotate { language, wlimit, range } => {
-					annotate::run(&name, &language, &wlimit, range.as_deref(), cli.max_jobs, cli.force, &cli.dir).await?;
+				ApplyCmd::Annotate(args) => {
+					annotate::run(&name, args, cli.max_jobs, cli.force, &cli.dir).await?;
 				}
 				ApplyCmd::Retry => {
 					retry::run(&name, cli.max_jobs, cli.force, cli.yes, &cli.dir).await?;

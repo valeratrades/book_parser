@@ -84,18 +84,23 @@ pub async fn run(name: &str, max_jobs: usize, force: bool, yes: bool, dir: &Path
 			.map(|fail| {
 				let language = fail.setting("language").expect(".fail file missing language setting").to_string();
 				let wlimit = fail.setting("wlimit").expect(".fail file missing wlimit setting").to_string();
+				let phonetic: bool = fail
+					.setting("phonetic")
+					.expect(".fail file missing phonetic setting")
+					.parse()
+					.expect("annotate writes phonetic as a bool");
 				if force {
 					let _ = fs::remove_file(annotated_dir.join(format!("section_{}.md", fail.num)));
 				}
 				let _ = fs::remove_file(&fail.path);
-				(fail.num, language, wlimit)
+				(fail.num, language, wlimit, phonetic)
 			})
 			.collect();
 
 		for chunk in items.chunks(max_jobs) {
 			let futs: Vec<_> = chunk
 				.iter()
-				.map(|(num, language, wlimit)| crate::annotate::annotate_section(*num, language, wlimit, &source_dir, &annotated_dir, &annotate_fail_dir))
+				.map(|(num, language, wlimit, phonetic)| crate::annotate::annotate_section(*num, language, wlimit, *phonetic, &source_dir, &annotated_dir, &annotate_fail_dir))
 				.collect();
 			run_batch(futs).await;
 		}
