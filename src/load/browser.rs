@@ -47,6 +47,7 @@ impl Session {
 	pub(super) async fn run<T>(target_lang: &str, f: impl AsyncFnOnce(&Session) -> Result<T>) -> Result<T> {
 		let cfg = BrowserConfig::builder()
 			.new_headless_mode()
+			.request_timeout(PAGE_TIMEOUT) // the evaluate request stays open while the page renders and translates
 			.user_data_dir(v_utils::xdg_cache_dir!("chrome_profile"))
 			.build()
 			.map_err(|e| eyre!("chrome config: {e}"))?;
