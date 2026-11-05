@@ -1,9 +1,10 @@
 {
   inputs = {
     v_flakes.url = "github:valeratrades/v_flakes?ref=v1.6";
+    translate_infrequent.url = "github:valeratrades/translate_infrequent";
   };
 
-  outputs = inputs@{ self, v_flakes }:
+  outputs = inputs@{ self, v_flakes, ... }:
     let
       inherit (v_flakes) flake-parts devenv nixpkgs pre-commit-hooks;
     in
@@ -27,6 +28,7 @@
           pname = manifest.name;
           stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
           python = pkgs.python312;
+          translate_infrequent = inputs'.translate_infrequent.packages.default;
 
           rs = v_flakes.rs {
             inherit pkgs rust;
@@ -72,7 +74,8 @@
             inherit pname;
             version = manifest.version;
 
-            nativeBuildInputs = with pkgs; [ pkg-config ];
+            nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
+            postInstall = "wrapProgram $out/bin/${pname} --prefix PATH : ${pkgs.lib.makeBinPath [ translate_infrequent ]}";
 
             cargoLock.lockFile = ./Cargo.lock;
             src = pkgs.lib.cleanSource ./.;
@@ -93,6 +96,7 @@
               pkgs.mold
               pkgs.pkg-config
               rust
+              translate_infrequent
             ] ++ pyRuntimeLibs ++ pre-commit-check.enabledPackages ++ combined.enabledPackages;
 
             env = {
