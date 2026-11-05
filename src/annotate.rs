@@ -1,10 +1,11 @@
-use std::{fs, path::Path, process::Stdio};
+use std::{fs, path::Path};
 
 use color_eyre::eyre::{Result, bail};
 use tokio::process::Command;
 
-use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, shell_escape, write_atomic};
+use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, write_atomic};
 
+const SECTION_SEP: &str = "\n\x1e\n"; // \x1e is whitespace to translate_infrequent's tokenizer, so it passes through recompose untouched
 #[derive(clap::Args)]
 pub struct Args {
 	/// Target language
@@ -21,7 +22,7 @@ pub struct Args {
 	phonetic: bool,
 }
 
-pub async fn run(name: &str, args: Args, max_jobs: usize, force: bool, dir: &Path) -> Result<()> {
+pub async fn run(name: &str, args: Args, force: bool, dir: &Path) -> Result<()> {
 	let Args { language, wlimit, range, phonetic } = args;
 	let (language, wlimit, range) = (language.as_str(), wlimit.as_str(), range.as_deref());
 	let root = book_root(dir, name);
@@ -66,12 +67,11 @@ pub async fn run(name: &str, args: Args, max_jobs: usize, force: bool, dir: &Pat
 			skipped,
 			to_annotate.len(),
 		);
-		for chunk in to_annotate.chunks(max_jobs) {
-			let futs: Vec<_> = chunk
-				.iter()
-				.map(|&num| annotate_section(num, language, wlimit, phonetic, &source_dir, &annotated_dir, &fail_dir))
-				.collect();
-			total_failed += run_batch(futs).await;
+		if !to_annotate.is_empty()
+			&& let Err(e) = annotate_sections(&to_annotate, language, wlimit, phonetic, &source_dir, &annotated_dir, &fail_dir).await
+		{
+			eprintln!("  {e}");
+			total_failed += to_annotate.len() as u32;
 		}
 	}
 
@@ -87,12 +87,11 @@ pub async fn run(name: &str, args: Args, max_jobs: usize, force: bool, dir: &Pat
 			let _ = fs::remove_file(&fail.path);
 			to_retry.push(fail.num);
 		}
-		for chunk in to_retry.chunks(max_jobs) {
-			let futs: Vec<_> = chunk
-				.iter()
-				.map(|&num| annotate_section(num, language, wlimit, phonetic, &source_dir, &annotated_dir, &fail_dir))
-				.collect();
-			total_failed += run_batch(futs).await;
+		if !to_retry.is_empty()
+			&& let Err(e) = annotate_sections(&to_retry, language, wlimit, phonetic, &source_dir, &annotated_dir, &fail_dir).await
+		{
+			eprintln!("  {e}");
+			total_failed += to_retry.len() as u32;
 		}
 	}
 
@@ -102,53 +101,64 @@ pub async fn run(name: &str, args: Args, max_jobs: usize, force: bool, dir: &Pat
 	println!("annotation done");
 	Ok(())
 }
-pub async fn annotate_section(num: u32, language: &str, wlimit: &str, phonetic: bool, source_dir: &Path, out_dir: &Path, fail_dir: &Path) -> Result<()> {
-	let source_md_path = source_dir.join(format!("section_{num}.md"));
-	let md = fs::read_to_string(&source_md_path)?;
-	let plaintext = md_to_plaintext(&md);
-	let tmp_in = out_dir.join(format!("section_{num}.tmp.txt"));
-	fs::write(&tmp_in, &plaintext)?;
 
-	let tmp_out = out_dir.join(format!("section_{num}.txt"));
-	let cmd = format!(
-		"translate_infrequent --cache -l {} -w {}{} < '{}' > '{}'",
-		shell_escape(language),
-		shell_escape(wlimit),
-		if phonetic { " --phonetic" } else { "" },
-		tmp_in.display(),
-		tmp_out.display()
-	);
-	let out = Command::new("sh").arg("-c").arg(cmd).stdout(Stdio::null()).stderr(Stdio::piped()).output().await?;
-	let _ = fs::remove_file(&tmp_in);
-
-	if !out.status.success() {
-		fs::write(
-			fail_dir.join(format!("section_{num}.fail")),
-			format!("annotate\nlanguage={language}\nwlimit={wlimit}\nphonetic={phonetic}\n"),
-		)?;
-		let stderr = String::from_utf8_lossy(&out.stderr);
-		let tail: Vec<&str> = stderr.lines().filter(|l| !l.contains(" - DEBUG - ")).collect(); // its DEBUG log is per-word noise
-		bail!("translate_infrequent failed for section {num}:\n{}", tail[tail.len().saturating_sub(15)..].join("\n"));
-	}
-
-	let translated = fs::read_to_string(&tmp_out)?;
-	let title = md_title(&md);
-	let lines: Vec<&str> = translated.lines().collect();
-	let out_md = paragraphs_to_md(title.as_deref(), &lines);
-	write_atomic(&out_dir.join(format!("section_{num}.md")), &out_md)?;
-	let _ = fs::remove_file(&tmp_out);
-	println!("  section {num} annotated");
-
-	Ok(())
-}
-async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>) -> u32 {
-	let results = futures::future::join_all(futs).await;
-	let mut failed = 0u32;
-	for r in results {
-		if let Err(e) = r {
-			eprintln!("  {e}");
-			failed += 1;
+/// One `translate_infrequent` call over sections `min(nums)..=max(nums)`, with everything before as `--history`, so its memory of seen words runs in reading order. Only `nums` are written.
+pub async fn annotate_sections(nums: &[u32], language: &str, wlimit: &str, phonetic: bool, source_dir: &Path, out_dir: &Path, fail_dir: &Path) -> Result<()> {
+	let (lo, hi) = (*nums.iter().min().expect("callers skip empty batches"), *nums.iter().max().unwrap());
+	let all = collect_numbered(source_dir, "section_", ".md")?;
+	let mut history = String::new();
+	let mut fed: Vec<(u32, String)> = Vec::new();
+	for (n, path) in &all {
+		match *n {
+			n if n < lo => history.push_str(&md_to_plaintext(&fs::read_to_string(path)?)),
+			n if n <= hi => fed.push((n, fs::read_to_string(path)?)),
+			_ => break,
 		}
 	}
-	failed
+	for n in nums {
+		assert!(fed.iter().any(|(m, _)| m == n), "section_{n}.md is not in {}", source_dir.display());
+	}
+
+	let tmp_in = out_dir.join(format!("sections_{lo}-{hi}.tmp.txt"));
+	fs::write(&tmp_in, fed.iter().map(|(_, md)| md_to_plaintext(md)).collect::<Vec<_>>().join(SECTION_SEP))?;
+	let tmp_history = out_dir.join(format!("history_{lo}.tmp.txt"));
+	let mut cmd = Command::new("translate_infrequent");
+	cmd.args(["--cache", "-l", language, "-w", wlimit, "-f"]).arg(&tmp_in);
+	if phonetic {
+		cmd.arg("--phonetic");
+	}
+	if !history.is_empty() {
+		fs::write(&tmp_history, &history)?;
+		cmd.arg("--history").arg(&tmp_history);
+	}
+	let out = cmd.output().await;
+	let _ = fs::remove_file(&tmp_in);
+	let _ = fs::remove_file(&tmp_history); // absent when there was no history
+	let out = out?;
+
+	if !out.status.success() {
+		for num in nums {
+			fs::write(
+				fail_dir.join(format!("section_{num}.fail")),
+				format!("annotate\nlanguage={language}\nwlimit={wlimit}\nphonetic={phonetic}\n"),
+			)?;
+		}
+		let stderr = String::from_utf8_lossy(&out.stderr);
+		let tail: Vec<&str> = stderr.lines().filter(|l| !l.contains(" - DEBUG - ")).collect(); // its DEBUG log is per-word noise
+		bail!("translate_infrequent failed for sections {lo}..={hi}:\n{}", tail[tail.len().saturating_sub(15)..].join("\n"));
+	}
+
+	let annotated = String::from_utf8(out.stdout)?;
+	let parts: Vec<&str> = annotated.split(SECTION_SEP).collect();
+	assert_eq!(parts.len(), fed.len(), "translate_infrequent must keep every section separator");
+	for ((num, md), part) in fed.iter().zip(parts) {
+		if !nums.contains(num) {
+			continue; // gap section: fed only to keep memory continuous
+		}
+		let lines: Vec<&str> = part.lines().collect();
+		write_atomic(&out_dir.join(format!("section_{num}.md")), &paragraphs_to_md(md_title(md).as_deref(), &lines))?;
+		println!("  section {num} annotated");
+	}
+
+	Ok(())
 }

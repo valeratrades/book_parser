@@ -160,7 +160,7 @@ async fn main() -> Result<()> {
 					translate::run(&name, &language, range.as_deref(), cli.max_jobs, cli.force, cli.yes, &cli.dir).await?;
 				}
 				ApplyCmd::Annotate(args) => {
-					annotate::run(&name, args, cli.max_jobs, cli.force, &cli.dir).await?;
+					annotate::run(&name, args, cli.force, &cli.dir).await?;
 				}
 				ApplyCmd::Retry => {
 					retry::run(&name, cli.max_jobs, cli.force, cli.yes, &cli.dir).await?;

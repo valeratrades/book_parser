@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use color_eyre::eyre::{Result, bail};
 
 use crate::{
-	section::{Stage, book_root, glob_fails},
+	section::{FailInfo, Stage, book_root, glob_fails},
 	translate,
 };
 
@@ -79,30 +79,33 @@ pub async fn run(name: &str, max_jobs: usize, force: bool, yes: bool, dir: &Path
 	// Process annotate failures
 	if !annotate_fails.is_empty() {
 		let source_dir = root.join(Stage::Translated.dir_name());
-		let items: Vec<_> = annotate_fails
-			.iter()
-			.map(|fail| {
-				let language = fail.setting("language").expect(".fail file missing language setting").to_string();
-				let wlimit = fail.setting("wlimit").expect(".fail file missing wlimit setting").to_string();
-				let phonetic: bool = fail
-					.setting("phonetic")
-					.expect(".fail file missing phonetic setting")
-					.parse()
-					.expect("annotate writes phonetic as a bool");
-				if force {
-					let _ = fs::remove_file(annotated_dir.join(format!("section_{}.md", fail.num)));
-				}
-				let _ = fs::remove_file(&fail.path);
-				(fail.num, language, wlimit, phonetic)
-			})
-			.collect();
-
-		for chunk in items.chunks(max_jobs) {
-			let futs: Vec<_> = chunk
-				.iter()
-				.map(|(num, language, wlimit, phonetic)| crate::annotate::annotate_section(*num, language, wlimit, *phonetic, &source_dir, &annotated_dir, &annotate_fail_dir))
-				.collect();
-			run_batch(futs).await;
+		let settings = |fail: &FailInfo| {
+			let language = fail.setting("language").expect(".fail file missing language setting").to_string();
+			let wlimit = fail.setting("wlimit").expect(".fail file missing wlimit setting").to_string();
+			let phonetic: bool = fail
+				.setting("phonetic")
+				.expect(".fail file missing phonetic setting")
+				.parse()
+				.expect("annotate writes phonetic as a bool");
+			(language, wlimit, phonetic)
+		};
+		let (language, wlimit, phonetic) = settings(&annotate_fails[0]);
+		let mut nums = Vec::new();
+		for fail in &annotate_fails {
+			assert_eq!(
+				settings(fail),
+				(language.clone(), wlimit.clone(), phonetic),
+				"annotate fails are retried in one batch, so they must share settings ({})",
+				fail.path.display()
+			);
+			if force {
+				let _ = fs::remove_file(annotated_dir.join(format!("section_{}.md", fail.num)));
+			}
+			let _ = fs::remove_file(&fail.path);
+			nums.push(fail.num);
+		}
+		if let Err(e) = crate::annotate::annotate_sections(&nums, &language, &wlimit, phonetic, &source_dir, &annotated_dir, &annotate_fail_dir).await {
+			eprintln!("  {e}");
 		}
 	}
 

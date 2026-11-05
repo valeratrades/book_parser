@@ -292,13 +292,6 @@ pub fn decode_entities(s: &str) -> String {
 	s.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'")
 }
 
-pub fn shell_escape(s: &str) -> String {
-	if s.bytes().all(|b| b.is_ascii_alphanumeric()) {
-		return s.to_string();
-	}
-	format!("'{}'", s.replace('\'', r"'\''"))
-}
-
 /// Find the first gap in `start..=end` where `section_N.md` is missing.
 /// Remove all section files at and after the gap. Returns the gap page, if any.
 pub fn enforce_contiguous(dir: &Path, start: u32, end: u32) -> Option<u32> {
