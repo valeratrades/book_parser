@@ -111,7 +111,7 @@ pub async fn annotate_section(num: u32, language: &str, wlimit: &str, phonetic: 
 
 	let tmp_out = out_dir.join(format!("section_{num}.txt"));
 	let cmd = format!(
-		"translate_infrequent -l {} -w {}{} < '{}' > '{}'",
+		"translate_infrequent --cache -l {} -w {}{} < '{}' > '{}'",
 		shell_escape(language),
 		shell_escape(wlimit),
 		if phonetic { " --phonetic" } else { "" },
