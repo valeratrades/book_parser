@@ -675,11 +675,11 @@
         "v_flakes": "v_flakes"
       },
       "locked": {
-        "lastModified": 1793933169,
-        "narHash": "sha256-LRFocIgajSXdNsmMPX3Yb+Q/zuc52hAblWTU9B+33kU=",
+        "lastModified": 1793942721,
+        "narHash": "sha256-tNflrPd/8tk4B4sP/uWcmRdL+AIF5OYMUFkobxWnKeY=",
         "owner": "valeratrades",
         "repo": "translate_infrequent",
-        "rev": "280f61e11eec3871c6806c79896424afebc497f3",
+        "rev": "a030b287a9c87f907ffe76c0c20db67a2a303362",
         "type": "github"
       },
       "original": {
