@@ -37,6 +37,7 @@
           github = v_flakes.github {
             inherit pkgs pname rs py;
             enable = true;
+            publishCachix = "valeratrades";
             envrc.impure = true; # devenv locates the project root through $PWD
             lastSupportedVersion = "nightly-${v_flakes.rs.nightly_version}";
             jobs = {

@@ -45,6 +45,8 @@ tabs_in_doc_comments = "allow"
 # const fns, so actually more performant
 get_first = "allow"
 get_last_with_len = "allow"
+if_not_else = "warn"
+integer_division = "warn"
 
 [lints.cargo]
 non_kebab_case_bins = "allow"
