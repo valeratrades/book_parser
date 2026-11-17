@@ -4,8 +4,8 @@ use chromiumoxide::{Browser, BrowserConfig, Handler, cdp::js_protocol::runtime::
 use color_eyre::eyre::{Result, ensure, eyre};
 use futures::StreamExt;
 
-/// Covers SPA render plus the first-use download of the on-device translation model.
-const PAGE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Covers SPA render, the first-use download of the on-device translation model, and translating a ~40k-char chapter (~90s alone).
+const PAGE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Waits for the SPA to settle, then rewrites every content block (and the title) in place through Chrome's
 /// on-device `Translator`. Chrome's page-translate races SPA hydration and can leave content untranslated.
