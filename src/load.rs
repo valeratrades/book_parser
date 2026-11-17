@@ -1,5 +1,5 @@
 use std::{
-	collections::{BTreeMap, BTreeSet, VecDeque},
+	collections::{BTreeSet, VecDeque},
 	fs,
 	path::Path,
 	sync::{
@@ -118,13 +118,10 @@ pub async fn run(args: Args, force: bool, dir: &Path, name_override: Option<&str
 		Some(lang) => browser::Session::run(lang, async |s| load_pages(&client, Some(s), &url_template, css_text, css_title, &sections_dir, queue, &bar).await).await,
 	};
 	bar.finish_and_clear();
-	let raw_titles = match loaded {
-		Ok(t) => t,
-		Err(e) => {
-			enforce_contiguous(&sections_dir, start, end);
-			return Err(e);
-		}
-	};
+	if let Err(e) = loaded {
+		enforce_contiguous(&sections_dir, start, end);
+		return Err(e);
+	}
 
 	if let Some(gap) = enforce_contiguous(&sections_dir, start, end) {
 		let loaded = gap - start;
@@ -133,7 +130,7 @@ pub async fn run(args: Args, force: bool, dir: &Path, name_override: Option<&str
 	}
 
 	if css_title.is_some() {
-		let chapters = mark_chapters(&sections_dir, start, end, &raw_titles)?;
+		let chapters = mark_chapters(&sections_dir, start, end)?;
 		println!("marked {chapters} chapter starts (Levenshtein ratio > 0.25)");
 	}
 
@@ -142,7 +139,6 @@ pub async fn run(args: Args, force: bool, dir: &Path, name_override: Option<&str
 	Ok(())
 }
 
-/// Returns the raw titles of the pages it saved.
 async fn load_pages(
 	client: &BookClient,
 	browser: Option<&browser::Session>,
@@ -152,10 +148,9 @@ async fn load_pages(
 	outdir: &Path,
 	mut queue: VecDeque<u32>,
 	bar: &ProgressBar,
-) -> Result<BTreeMap<u32, String>> {
+) -> Result<()> {
 	let mut chunk_idx = 0u32;
 	let in_flight = Mutex::new(BTreeSet::new());
-	let mut raw_titles: BTreeMap<u32, String> = BTreeMap::new();
 	while !queue.is_empty() {
 		let par = client.effective_parallel();
 		let to_secs = client.effective_timeout_secs();
@@ -172,10 +167,7 @@ async fn load_pages(
 		let mut requeue = Vec::new();
 		for (page, res) in chunk.iter().zip(results) {
 			match res? {
-				PageOutcome::Saved { raw_title } =>
-					if let Some(t) = raw_title {
-						raw_titles.insert(*page, t);
-					},
+				PageOutcome::Saved => {}
 				PageOutcome::Throttled => requeue.push(*page),
 			}
 		}
@@ -185,42 +177,33 @@ async fn load_pages(
 		}
 		chunk_idx += 1;
 	}
-	Ok(raw_titles)
+	Ok(())
 }
 
-/// Walk sections in order. For each page whose raw title was just scraped, decide whether
-/// it begins a new chapter (Levenshtein ratio against the last kept title > 25%, or none yet).
-/// Chapter starts get a `# title` heading prepended to the .md. Pages absent from `raw_titles`
-/// (already processed in a prior run) feed `last_chapter_title` from their existing top-level
-/// `# X` heading, if any.
-fn mark_chapters(dir: &Path, start: u32, end: u32, raw_titles: &BTreeMap<u32, String>) -> Result<u32> {
+/// Walk sections in order using the persisted `title_N.txt` sidecars. A page begins a new chapter
+/// if its raw title differs from the last chapter title (Levenshtein ratio > 25%) or none exists yet;
+/// pages already carrying a `# ` heading are left as-is, so re-runs are idempotent.
+fn mark_chapters(dir: &Path, start: u32, end: u32) -> Result<u32> {
 	let mut last_chapter_title: Option<String> = None;
 	let mut starts = 0u32;
 	for page in start..=end {
 		let md_path = dir.join(format!("section_{page}.md"));
-		let Some(raw) = raw_titles.get(&page) else {
-			let md = fs::read_to_string(&md_path)?;
-			if let Some(line) = md.lines().next()
-				&& let Some(t) = line.strip_prefix("# ")
-			{
-				last_chapter_title = Some(t.trim().to_string());
-			}
+		let body = fs::read_to_string(&md_path)?;
+		if let Some(line) = body.lines().next()
+			&& let Some(t) = line.strip_prefix("# ")
+		{
+			last_chapter_title = Some(t.trim().to_string());
 			continue;
-		};
+		}
+		let raw = fs::read_to_string(dir.join(format!("title_{page}.txt")))?;
 		assert!(!raw.is_empty(), "extract rejects empty titles");
 		let new_chapter = match &last_chapter_title {
 			None => true,
-			Some(prev) => title_diff_ratio(prev, raw) > 0.25,
+			Some(prev) => title_diff_ratio(prev, &raw) > 0.25,
 		};
 		if new_chapter {
-			let body = fs::read_to_string(&md_path)?;
-			let mut out = String::with_capacity(raw.len() + body.len() + 4);
-			out.push_str("# ");
-			out.push_str(raw);
-			out.push('\n');
-			out.push_str(&body);
-			fs::write(&md_path, out)?;
-			last_chapter_title = Some(raw.clone());
+			fs::write(&md_path, format!("# {raw}\n{body}"))?;
+			last_chapter_title = Some(raw);
 			starts += 1;
 		}
 	}
@@ -296,7 +279,7 @@ impl BookClient {
 }
 
 enum PageOutcome {
-	Saved { raw_title: Option<String> },
+	Saved,
 	Throttled,
 }
 
@@ -371,6 +354,9 @@ async fn load_page(
 	let decoded = decode_entities(&text);
 	let lines: Vec<&str> = decoded.lines().collect();
 	let md = paragraphs_to_md(None, &lines);
+	if let Some(t) = &raw_title {
+		fs::write(outdir.join(format!("title_{page}.txt")), t)?; // before the .md: the .md's existence marks the page as loaded
+	}
 	write_atomic(&out_path, &md)?;
 	bar.suspend(|| println!("  page {page} ok"));
 	bar.inc(1);
@@ -380,7 +366,7 @@ async fn load_page(
 		show(&mut f);
 	}
 
-	Ok(PageOutcome::Saved { raw_title })
+	Ok(PageOutcome::Saved)
 }
 
 /// `None`: 503, re-queue the page.
