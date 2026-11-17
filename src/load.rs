@@ -1,12 +1,16 @@
 use std::{
-	collections::{BTreeMap, VecDeque},
+	collections::{BTreeMap, BTreeSet, VecDeque},
 	fs,
 	path::Path,
-	sync::atomic::{AtomicU64, AtomicUsize, Ordering},
+	sync::{
+		Mutex,
+		atomic::{AtomicU64, AtomicUsize, Ordering},
+	},
 };
 
 use color_eyre::eyre::{Result, bail, eyre};
 use futures::future::join_all;
+use indicatif::{ProgressBar, ProgressStyle};
 use regex::Regex;
 use reqwest::Client;
 use scraper::{Html, Selector};
@@ -106,11 +110,14 @@ pub async fn run(args: Args, force: bool, dir: &Path, name_override: Option<&str
 	);
 
 	let client = BookClient::try_new(cookie, parallel, timeout)?;
+	let bar = ProgressBar::new(pages_to_load.len() as u64);
+	bar.set_style(ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} pages  elapsed {elapsed_precise}  eta {eta_precise}  {msg}").expect("static template"));
 	let queue: VecDeque<u32> = pages_to_load.into();
 	let loaded = match &browser_translate {
-		None => load_pages(&client, None, &url_template, css_text, css_title, &sections_dir, queue).await,
-		Some(lang) => browser::Session::run(lang, async |s| load_pages(&client, Some(s), &url_template, css_text, css_title, &sections_dir, queue).await).await,
+		None => load_pages(&client, None, &url_template, css_text, css_title, &sections_dir, queue, &bar).await,
+		Some(lang) => browser::Session::run(lang, async |s| load_pages(&client, Some(s), &url_template, css_text, css_title, &sections_dir, queue, &bar).await).await,
 	};
+	bar.finish_and_clear();
 	let raw_titles = match loaded {
 		Ok(t) => t,
 		Err(e) => {
@@ -144,20 +151,22 @@ async fn load_pages(
 	css_title: Option<&str>,
 	outdir: &Path,
 	mut queue: VecDeque<u32>,
+	bar: &ProgressBar,
 ) -> Result<BTreeMap<u32, String>> {
 	let mut chunk_idx = 0u32;
+	let in_flight = Mutex::new(BTreeSet::new());
 	let mut raw_titles: BTreeMap<u32, String> = BTreeMap::new();
 	while !queue.is_empty() {
 		let par = client.effective_parallel();
 		let to_secs = client.effective_timeout_secs();
 		if chunk_idx > 0 && to_secs > 0 {
-			println!("  waiting {to_secs}s between chunks...");
+			bar.println(format!("  waiting {to_secs}s between chunks..."));
 			tokio::time::sleep(std::time::Duration::from_secs(to_secs)).await;
 		}
 
 		let take = par.min(queue.len());
 		let chunk: Vec<u32> = queue.drain(..take).collect();
-		let futs = chunk.iter().map(|&p| load_page(client, browser, url_template, p, css_text, css_title, outdir));
+		let futs = chunk.iter().map(|&p| load_page(client, browser, url_template, p, css_text, css_title, outdir, bar, &in_flight));
 		let results = join_all(futs).await;
 
 		let mut requeue = Vec::new();
@@ -332,7 +341,15 @@ async fn load_page(
 	css_text: &[String],
 	css_title: Option<&str>,
 	outdir: &Path,
+	bar: &ProgressBar,
+	in_flight: &Mutex<BTreeSet<u32>>,
 ) -> Result<PageOutcome> {
+	let show = |f: &mut BTreeSet<u32>| bar.set_message(format!("loading {}", f.iter().map(u32::to_string).collect::<Vec<_>>().join(",")));
+	{
+		let mut f = in_flight.lock().unwrap();
+		f.insert(page);
+		show(&mut f);
+	}
 	let url = url_template.replace("{}", &page.to_string());
 	let out_path = outdir.join(format!("section_{page}.md"));
 
@@ -342,6 +359,9 @@ async fn load_page(
 			Some(html) => html,
 			None => {
 				tracing::debug!("page {page} throttled, will retry");
+				let mut f = in_flight.lock().unwrap();
+				f.remove(&page);
+				show(&mut f);
 				return Ok(PageOutcome::Throttled);
 			}
 		},
@@ -352,7 +372,13 @@ async fn load_page(
 	let lines: Vec<&str> = decoded.lines().collect();
 	let md = paragraphs_to_md(None, &lines);
 	write_atomic(&out_path, &md)?;
-	println!("  page {page} ok");
+	bar.println(format!("  page {page} ok"));
+	bar.inc(1);
+	{
+		let mut f = in_flight.lock().unwrap();
+		f.remove(&page);
+		show(&mut f);
+	}
 
 	Ok(PageOutcome::Saved { raw_title })
 }

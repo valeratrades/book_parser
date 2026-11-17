@@ -1,6 +1,7 @@
 use std::{fs, path::Path};
 
 use color_eyre::eyre::{Result, bail};
+use indicatif::{ProgressBar, ProgressStyle};
 use tokio::process::Command;
 
 use crate::section::{PageRange, Stage, book_root, collect_numbered, glob_fails, md_title, md_to_plaintext, paragraphs_to_md, parse_range, persist_language, write_atomic};
@@ -131,7 +132,12 @@ pub async fn annotate_sections(nums: &[u32], language: &str, wlimit: &str, phone
 		fs::write(&tmp_history, &history)?;
 		cmd.arg("--history").arg(&tmp_history);
 	}
+	let spinner = ProgressBar::new_spinner();
+	spinner.set_style(ProgressStyle::with_template("{spinner} annotating sections {msg}  elapsed {elapsed_precise}").expect("static template"));
+	spinner.set_message(format!("{lo}..={hi} ({} to write)", nums.len()));
+	spinner.enable_steady_tick(std::time::Duration::from_millis(100));
 	let out = cmd.output().await;
+	spinner.finish_and_clear();
 	let _ = fs::remove_file(&tmp_in);
 	let _ = fs::remove_file(&tmp_history); // absent when there was no history
 	let out = out?;
