@@ -292,7 +292,7 @@ async fn run_batch(futs: Vec<impl std::future::Future<Output = Result<()>>>, bar
 	for r in results {
 		bar.inc(1);
 		if let Err(e) = r {
-			bar.println(format!("  {e}"));
+			bar.suspend(|| println!("  {e}"));
 			failed += 1;
 		}
 	}

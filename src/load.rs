@@ -160,7 +160,7 @@ async fn load_pages(
 		let par = client.effective_parallel();
 		let to_secs = client.effective_timeout_secs();
 		if chunk_idx > 0 && to_secs > 0 {
-			bar.println(format!("  waiting {to_secs}s between chunks..."));
+			bar.suspend(|| println!("  waiting {to_secs}s between chunks..."));
 			tokio::time::sleep(std::time::Duration::from_secs(to_secs)).await;
 		}
 
@@ -372,7 +372,7 @@ async fn load_page(
 	let lines: Vec<&str> = decoded.lines().collect();
 	let md = paragraphs_to_md(None, &lines);
 	write_atomic(&out_path, &md)?;
-	bar.println(format!("  page {page} ok"));
+	bar.suspend(|| println!("  page {page} ok"));
 	bar.inc(1);
 	{
 		let mut f = in_flight.lock().unwrap();
