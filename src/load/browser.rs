@@ -71,32 +71,37 @@ impl Session {
 	}
 
 	pub(super) async fn fetch_translated(&self, url: &str, css_text: &[String], css_title: Option<&str>) -> Result<String> {
-		let page = self.browser.new_page(url).await?;
-		let expr = format!(
-			"({TRANSLATE_JS})({}, {}, {}, {})",
-			serde_json::to_string(css_text)?,
-			serde_json::to_string(super::CONTENT_BLOCKS)?,
-			serde_json::to_string(&css_title)?,
-			serde_json::to_string(&self.target_lang)?,
-		);
-		let params = EvaluateParams::builder()
-			.expression(expr)
-			.await_promise(true)
-			.user_gesture(true) // `Translator.create` needs user activation to download a model
-			.build()
-			.map_err(|e| eyre!("evaluate params: {e}"))?;
-		let translated: u64 = tokio::time::timeout(PAGE_TIMEOUT, page.evaluate_expression(params))
-			.await
-			.map_err(|_| eyre!("{url}: not rendered and translated within {PAGE_TIMEOUT:?}"))?
-			.map_err(|e| match e {
-				CdpError::JavascriptException(e) => eyre!("{url}: {}", e.exception.and_then(|o| o.description).unwrap_or(e.text)),
-				e => e.into(),
-			})?
-			.into_value()?;
-		ensure!(translated > 0, "{url}: no text to translate");
-		let html = page.content().await?;
-		page.close().await?;
-		Ok(html)
+		// whole page, not just the evaluate: navigation and `content` have hung with no CDP timeout firing
+		tokio::time::timeout(PAGE_TIMEOUT, async {
+			let page = self.browser.new_page(url).await?;
+			let expr = format!(
+				"({TRANSLATE_JS})({}, {}, {}, {})",
+				serde_json::to_string(css_text)?,
+				serde_json::to_string(super::CONTENT_BLOCKS)?,
+				serde_json::to_string(&css_title)?,
+				serde_json::to_string(&self.target_lang)?,
+			);
+			let params = EvaluateParams::builder()
+				.expression(expr)
+				.await_promise(true)
+				.user_gesture(true) // `Translator.create` needs user activation to download a model
+				.build()
+				.map_err(|e| eyre!("evaluate params: {e}"))?;
+			let translated: u64 = page
+				.evaluate_expression(params)
+				.await
+				.map_err(|e| match e {
+					CdpError::JavascriptException(e) => eyre!("{url}: {}", e.exception.and_then(|o| o.description).unwrap_or(e.text)),
+					e => e.into(),
+				})?
+				.into_value()?;
+			ensure!(translated > 0, "{url}: no text to translate");
+			let html = page.content().await?;
+			page.close().await?;
+			Ok(html)
+		})
+		.await
+		.map_err(|_| eyre!("{url}: not loaded and translated within {PAGE_TIMEOUT:?}"))?
 	}
 }
 
