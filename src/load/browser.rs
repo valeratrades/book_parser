@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use chromiumoxide::{Browser, BrowserConfig, Handler, cdp::js_protocol::runtime::EvaluateParams, error::CdpError};
+use chromiumoxide::{Browser, BrowserConfig, Handler, cdp::js_protocol::runtime::EvaluateParams, error::CdpError, layout::Point};
 use color_eyre::eyre::{Result, ensure, eyre};
 use futures::StreamExt;
 
@@ -74,6 +74,10 @@ impl Session {
 		// whole page, not just the evaluate: navigation and `content` have hung with no CDP timeout firing
 		tokio::time::timeout(PAGE_TIMEOUT, async {
 			let page = self.browser.new_page(url).await?;
+			// `Translator.create` downloading a language pack needs user activation, which CDP's `userGesture` doesn't grant; a dispatched click does. The overlay keeps the click off page links.
+			page.evaluate("document.body.append(Object.assign(document.createElement('div'), { style: 'position:fixed;inset:0;z-index:2147483647', onclick() { this.remove(); } }))")
+				.await?;
+			page.click(Point::new(1., 1.)).await?;
 			let expr = format!(
 				"({TRANSLATE_JS})({}, {}, {}, {})",
 				serde_json::to_string(css_text)?,
@@ -84,7 +88,6 @@ impl Session {
 			let params = EvaluateParams::builder()
 				.expression(expr)
 				.await_promise(true)
-				.user_gesture(true) // `Translator.create` needs user activation to download a model
 				.build()
 				.map_err(|e| eyre!("evaluate params: {e}"))?;
 			let translated: u64 = page

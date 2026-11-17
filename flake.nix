@@ -76,7 +76,7 @@
             version = manifest.version;
 
             nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
-            postInstall = "wrapProgram $out/bin/${pname} --prefix PATH : ${pkgs.lib.makeBinPath [ translate_infrequent ]}";
+            postInstall = "wrapProgram $out/bin/${pname} --prefix PATH : ${pkgs.lib.makeBinPath [ translate_infrequent ]} --set-default CHROME ${pkgs.chromium}/bin/chromium"; # CHROME: chromiumoxide otherwise takes the first `chrome` on PATH, which may be a wrapper adding its own profile/port flags
 
             cargoLock.lockFile = ./Cargo.lock;
             src = pkgs.lib.cleanSource ./.;
@@ -101,6 +101,7 @@
             ] ++ pyRuntimeLibs ++ pre-commit-check.enabledPackages ++ combined.enabledPackages;
 
             env = {
+              CHROME = "${pkgs.chromium}/bin/chromium";
               RUST_BACKTRACE = 1;
               RUST_LIB_BACKTRACE = 0;
             };

@@ -101,7 +101,7 @@ enum FromCmd {
 	///   book_parser from load 'https://site.com/novel/foo/ch-1..=500' \
 	///     --css-text '#chapter-content' --css-text 'article.post' --css-text '.entry-content'
 	///
-	///   # also extract a chapter title; new-chapter detection by Levenshtein ratio
+	///   # also extract a chapter title; a page starts a new chapter when its title changes
 	///   book_parser from load 'https://site.com/novel/foo/chapter/1..=500/' \
 	///     --css-text '#chapter-container' --css-title 'h1.chapter-title'
 	Load(load::Args),

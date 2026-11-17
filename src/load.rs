@@ -3,12 +3,12 @@ use std::{
 	fs,
 	path::Path,
 	sync::{
-		Mutex,
+		LazyLock, Mutex,
 		atomic::{AtomicU64, AtomicUsize, Ordering},
 	},
 };
 
-use color_eyre::eyre::{Result, bail, eyre};
+use color_eyre::eyre::{Result, WrapErr, bail, eyre};
 use futures::future::join_all;
 use indicatif::{ProgressBar, ProgressStyle};
 use regex::Regex;
@@ -34,9 +34,9 @@ pub struct Args {
 	/// CSS selectors for content extraction (can be repeated)
 	#[arg(long, required = true)]
 	css_text: Vec<String>,
-	/// Optional CSS selector for the chapter-title element. If a page's title differs from
-	/// the previous kept title by more than 25% (Levenshtein ratio), that page starts a new
-	/// chapter and gets a `# title` heading.
+	/// Optional CSS selector for the chapter-title element. A page whose title differs from the
+	/// previous chapter's (numbers changed, or >25% Levenshtein; a trailing `(2/3)`/`Part 2` is ignored)
+	/// starts a new chapter and gets a `# title` heading.
 	#[arg(long)]
 	css_title: Option<String>,
 	/// Raw `Cookie` header sent with every request, e.g. `beget=begetok` for JS cookie walls
@@ -131,7 +131,7 @@ pub async fn run(args: Args, force: bool, dir: &Path, name_override: Option<&str
 
 	if css_title.is_some() {
 		let chapters = mark_chapters(&sections_dir, start, end)?;
-		println!("marked {chapters} chapter starts (Levenshtein ratio > 0.25)");
+		println!("marked {chapters} chapter starts");
 	}
 
 	println!("loaded all {} pages ({start}..={end})", end - start + 1);
@@ -180,9 +180,7 @@ async fn load_pages(
 	Ok(())
 }
 
-/// Walk sections in order using the persisted `title_N.txt` sidecars. A page begins a new chapter
-/// if its raw title differs from the last chapter title (Levenshtein ratio > 25%) or none exists yet;
-/// pages already carrying a `# ` heading are left as-is, so re-runs are idempotent.
+/// Walks sections in order using the persisted `title_N.txt` sidecars; pages already carrying a `# ` heading are left as-is, so re-runs are idempotent.
 fn mark_chapters(dir: &Path, start: u32, end: u32) -> Result<u32> {
 	let mut last_chapter_title: Option<String> = None;
 	let mut starts = 0u32;
@@ -195,12 +193,10 @@ fn mark_chapters(dir: &Path, start: u32, end: u32) -> Result<u32> {
 			last_chapter_title = Some(t.trim().to_string());
 			continue;
 		}
-		let raw = fs::read_to_string(dir.join(format!("title_{page}.txt")))?;
+		let title_path = dir.join(format!("title_{page}.txt"));
+		let raw = fs::read_to_string(&title_path).wrap_err_with(|| format!("{}: pages loaded before titles were persisted need reloading with --force", title_path.display()))?;
 		assert!(!raw.is_empty(), "extract rejects empty titles");
-		let new_chapter = match &last_chapter_title {
-			None => true,
-			Some(prev) => title_diff_ratio(prev, &raw) > 0.25,
-		};
+		let new_chapter = last_chapter_title.as_deref().is_none_or(|prev| starts_new_chapter(prev, &raw));
 		if new_chapter {
 			fs::write(&md_path, format!("# {raw}\n{body}"))?;
 			last_chapter_title = Some(raw);
@@ -210,13 +206,19 @@ fn mark_chapters(dir: &Path, start: u32, end: u32) -> Result<u32> {
 	Ok(starts)
 }
 
-/// Levenshtein distance / max(len_a, len_b), in chars. Returns 0.0 if both empty.
-fn title_diff_ratio(a: &str, b: &str) -> f64 {
-	let a: Vec<char> = a.chars().collect();
-	let b: Vec<char> = b.chars().collect();
+/// A trailing part marker (`(2/3)`, `Part 2`, `(ii)`) is ignored; after that, any change in the title's numbers is a new chapter, otherwise a Levenshtein ratio above 25% is.
+fn starts_new_chapter(prev: &str, next: &str) -> bool {
+	static PART: LazyLock<Regex> =
+		LazyLock::new(|| Regex::new(r"(?i)\s*(?:[(\[](?:part\s*|teil\s*)?(?:\d+|[ivx]+)(?:\s*/\s*\d+)?[)\]]|(?:part|teil)\s*(?:\d+|[ivx]+)|\d+\s*/\s*\d+)\s*$").expect("static regex"));
+	static NUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+").expect("static regex"));
+	let (a, b) = (PART.replace(prev.trim(), ""), PART.replace(next.trim(), ""));
+	if !NUM.find_iter(&a).map(|m| m.as_str()).eq(NUM.find_iter(&b).map(|m| m.as_str())) {
+		return true;
+	}
+	let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
 	let (m, n) = (a.len(), b.len());
 	if m == 0 && n == 0 {
-		return 0.0;
+		return false;
 	}
 	let mut prev: Vec<usize> = (0..=n).collect();
 	let mut curr = vec![0usize; n + 1];
@@ -228,7 +230,7 @@ fn title_diff_ratio(a: &str, b: &str) -> f64 {
 		}
 		std::mem::swap(&mut prev, &mut curr);
 	}
-	prev[n] as f64 / m.max(n) as f64
+	prev[n] as f64 / m.max(n) as f64 > 0.25
 }
 
 struct BookClient {
@@ -458,22 +460,30 @@ fn extract(html: &str, css_selector_strings: &[String], css_title: Option<&str>)
 
 #[cfg(test)]
 mod tests {
-	use super::title_diff_ratio;
+	use super::starts_new_chapter;
 
 	#[test]
-	fn identical_titles_are_continuation() {
-		let r = title_diff_ratio("Chapter 232 - 232: Before the Storm", "Chapter 232 - 232: Before the Storm");
-		assert!(r <= 0.25, "expected continuation, got ratio {r}");
+	fn continuation_pages() {
+		for (prev, next) in [
+			("Chapter 232 - 232: Before the Storm", "Chapter 232 - 232: Before the Storm"),
+			("Chapter 232: Before the Storm (1/3)", "Chapter 232: Before the Storm (2/3)"),
+			("Chapter 5 - Into the Woods (Part 1)", "Chapter 5 - Into the Woods (Part 2)"),
+			("Chapter 5 - Into the Woods Part 1", "Chapter 5 - Into the Woods Part 2"),
+		] {
+			assert!(!starts_new_chapter(prev, next), "{prev:?} -> {next:?}");
+		}
 	}
 
 	#[test]
-	fn different_chapters_cross_threshold() {
-		let r = title_diff_ratio("Chapter 232 - 232: Before the Storm", "Chapter 233 - 233: After the Battle");
-		assert!(r > 0.25, "expected new chapter, got ratio {r}");
-	}
-
-	#[test]
-	fn empty_inputs() {
-		assert_eq!(title_diff_ratio("", ""), 0.0);
+	fn new_chapters() {
+		for (prev, next) in [
+			("Chapter 232 - 232: Before the Storm", "Chapter 233 - 233: After the Battle"),
+			("Kapitel 104 - 104. Ich gewinne (i)", "Kapitel 105 - 105. Ich gewinne (II)"),
+			("Kapitel 94 - 94. Geister", "Kapitel 95 - 95. Verräter"),
+			("Kapitel CH-AU-1: Das AU-Kapitel - Raubtier", "Kapitel CH-AU-2: Das AU-Kapitel - Abgrund der Zeit"),
+			("Volume 2 Chapter 5", "Volume 2 Chapter 6"),
+		] {
+			assert!(starts_new_chapter(prev, next), "{prev:?} -> {next:?}");
+		}
 	}
 }
