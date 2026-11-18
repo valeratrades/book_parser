@@ -3,6 +3,7 @@ cargo-features = ["codegen-backend"]
 name = "book_parser"
 version = "0.1.0"
 edition = "2024"
+repository = "https://github.com/valeratrades/book_parser"
 
 [package.metadata.cargo-machete]
 ignored = ["miette"]
