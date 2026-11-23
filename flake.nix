@@ -34,12 +34,13 @@
             inherit pkgs rust;
           };
           py = v_flakes.py { inherit pkgs; };
+          oldestSupportedVersion = "nightly-${v_flakes.rs.nightly_version}";
           github = v_flakes.github {
             inherit pkgs pname rs py;
             enable = true;
             publishCachix = "valeratrades";
             envrc.impure = true; # devenv locates the project root through $PWD
-            lastSupportedVersion = "nightly-${v_flakes.rs.nightly_version}";
+            inherit oldestSupportedVersion;
             jobs = {
               errors.augment = [ "rust-tests" ];
               warnings.augment = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
@@ -48,7 +49,7 @@
           };
           readme = v_flakes.readme-fw {
             inherit pkgs pname;
-            lastSupportedVersion = "nightly-1.92";
+            inherit oldestSupportedVersion;
             rootDir = ./.;
             licenses = [{ license = v_flakes.files.licenses.blue_oak; }];
             badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
